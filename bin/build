@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -e
+
+export $(grep -v '^#' .env | xargs)
+export DOCKER_BUILDKIT=1
+
+docker build -t sunbirddocker/sunbirdai-ultravox:v1.0.0 --secret id=HF_TOKEN --build-arg MODEL_NAME="jq/sunflower-ultravox-251111" .
