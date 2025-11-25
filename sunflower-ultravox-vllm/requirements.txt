@@ -1,0 +1,6 @@
+fastapi
+openai
+python-dotenv
+natsort
+runpod
+httpx
