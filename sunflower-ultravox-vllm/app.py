@@ -25,13 +25,13 @@ url = f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
 print(f"Using Runpod endpoint URL: {url}")
 
 
-# runpod_client = OpenAI(
-#     base_url=os.getenv("OPENAI_BASE_URL", url),
-#     api_key=os.getenv("RUNPOD_API_KEY", "your-api-key")
-# )
+runpod_client = OpenAI(
+    base_url=os.getenv("OPENAI_BASE_URL", url),
+    api_key=os.getenv("RUNPOD_API_KEY", "your-api-key")
+)
 
-VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://69.63.236.188:26331")
-runpod_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="dummy")
+# VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://69.63.236.188:26331")
+# runpod_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="dummy")
 
 
 

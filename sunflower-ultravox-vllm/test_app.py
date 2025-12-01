@@ -2,7 +2,7 @@ import requests
 
 url = "http://localhost:8001/transcribe"
 
-with open("audios/context_eng_1.wav", "rb") as f:
+with open("audios/context_eng_7.wav", "rb") as f:
     files = {"audio_file": f}
     data = {
         "task": "Translate to English: ",
