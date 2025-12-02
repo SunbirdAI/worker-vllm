@@ -1,0 +1,43 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore, with the addition of
+# "#!include" directives (which insert the entries of the given .gitignore-style
+# file at that point).
+
+# Git and IDE
+.git/
+.gitignore
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# CRITICAL: Exclude secrets
+.env
+.env.*
+
+# Development and test files
+test_app.py
+*.ipynb
+.ipynb_checkpoints/
+audios/
+asserts/
+audiobase64.txt
+loops.txt
+server.log
+
+# Documentation
+README.md
+omniligual-asr.md

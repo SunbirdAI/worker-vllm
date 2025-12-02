@@ -7,7 +7,6 @@ from openai import OpenAI
 import base64
 import os
 from dotenv import load_dotenv
-import runpod
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
@@ -26,22 +25,9 @@ app.add_middleware(
 )
 
 # Initialize OpenAI client (configure with your base_url and api_key)
-RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
-RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID")
-runpod.api_key = RUNPOD_API_KEY
-endpoint = runpod.Endpoint(RUNPOD_ENDPOINT_ID)
-VLLM_BASE_URL = f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}"
-url = f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
-print(f"Using Runpod endpoint URL: {url}")
 
-
-runpod_client = OpenAI(
-    base_url=os.getenv("OPENAI_BASE_URL", url),
-    api_key=os.getenv("RUNPOD_API_KEY", "your-api-key")
-)
-
-# VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://69.63.236.188:26331")
-# runpod_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="dummy")
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://69.63.236.188:26331")
+runpod_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="dummy")
 
 
 

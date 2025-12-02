@@ -1,6 +1,8 @@
 import requests
 
-url = "http://localhost:8001/transcribe"
+# url = "http://localhost:8001/transcribe"
+# url = "http://69.143.221.78:23779/transcribe"
+url ="http://4.151.151.100:8001/transcribe"
 
 with open("audios/context_eng_7.wav", "rb") as f:
     files = {"audio_file": f}

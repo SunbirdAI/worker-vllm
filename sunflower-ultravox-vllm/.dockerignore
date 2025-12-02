@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+
+# CRITICAL: Exclude secrets
+.env
+.env.*
+
+# Development files
+test_app.py
+*.ipynb
+.ipynb_checkpoints/
+audios/
+asserts/
+audiobase64.txt
+loops.txt
+server.log
+
+# Documentation
+README.md
+omniligual-asr.md
+*.md
+
+# Git and IDE
+.git/
+.gitignore
+.DS_Store
+.vscode/
+.idea/
+
+# Misc
+*.log
+*.txt
+!requirements.txt
