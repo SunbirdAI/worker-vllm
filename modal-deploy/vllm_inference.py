@@ -103,7 +103,7 @@ FAST_BOOT = True
 # once the model is spun up and the `serve` function returns.
 
 
-app = modal.App("example-vllm-inference")
+app = modal.App("Qwen3-8B-FP8")
 
 N_GPU = 1
 MINUTES = 60  # seconds
@@ -112,8 +112,8 @@ VLLM_PORT = 8000
 
 @app.function(
     image=vllm_image,
-    gpu=f"H100:{N_GPU}",
-    scaledown_window=15 * MINUTES,  # how long should we stay up with no requests?
+    gpu=f"L4:{N_GPU}",
+    scaledown_window=2 * MINUTES,  # how long should we stay up with no requests?
     timeout=10 * MINUTES,  # how long should we wait for container start?
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
