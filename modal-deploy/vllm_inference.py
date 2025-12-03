@@ -56,8 +56,9 @@ vllm_image = (
 # like Qwen3-8B, in eight bit precision, along with a very large KV cache.
 
 
-MODEL_NAME = "Qwen/Qwen3-8B-FP8"
-MODEL_REVISION = "220b46e3b2180893580a4454f21f22d3ebb187d3"  # avoid nasty surprises when repos update!
+MODEL_NAME = "Sunbird/Sunflower-14B-FP8"
+# MODEL_NAME = "Qwen/Qwen3-8B-FP8"
+# MODEL_REVISION = "220b46e3b2180893580a4454f21f22d3ebb187d3"  # avoid nasty surprises when repos update!
 
 # Although vLLM will download weights from Hugging Face on-demand,
 # we want to cache them so we don't do it every time our server starts.
@@ -103,7 +104,7 @@ FAST_BOOT = True
 # once the model is spun up and the `serve` function returns.
 
 
-app = modal.App("Qwen3-8B-FP8")
+app = modal.App("Sunflower-14B-FP8")
 
 N_GPU = 1
 MINUTES = 60  # seconds
@@ -112,13 +113,14 @@ VLLM_PORT = 8000
 
 @app.function(
     image=vllm_image,
-    gpu=f"L4:{N_GPU}",
+    gpu=f"A100-40GB:{N_GPU}",
     scaledown_window=2 * MINUTES,  # how long should we stay up with no requests?
     timeout=10 * MINUTES,  # how long should we wait for container start?
     volumes={
         "/root/.cache/huggingface": hf_cache_vol,
         "/root/.cache/vllm": vllm_cache_vol,
     },
+    secrets=[modal.Secret.from_name("huggingface-read")],
 )
 @modal.concurrent(  # how many requests can one replica handle? tune carefully!
     max_inputs=32
@@ -132,8 +134,8 @@ def serve():
         "serve",
         "--uvicorn-log-level=info",
         MODEL_NAME,
-        "--revision",
-        MODEL_REVISION,
+        # "--revision",
+        # MODEL_REVISION,
         "--served-model-name",
         MODEL_NAME,
         "llm",
@@ -209,7 +211,7 @@ def serve():
 
 
 @app.local_entrypoint()
-async def test(test_timeout=10 * MINUTES, content=None, twice=True):
+async def test(test_timeout=10 * MINUTES, content=None, twice=False):
     url = serve.get_web_url()
 
     system_prompt = {
