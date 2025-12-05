@@ -66,7 +66,7 @@ def main():
     parser.add_argument(
         "--app-name",
         type=str,
-        default="example-vllm-inference",
+        default="Sunflower-14B-FP8",
         help="A Modal App serving an OpenAI-compatible API",
     )
     parser.add_argument(
@@ -102,13 +102,13 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default="Compose a limerick about baboons and racoons.",
+        default="Who are you?",
         help="The user prompt for the chat completion",
     )
     parser.add_argument(
         "--system-prompt",
         type=str,
-        default="You are a poetic assistant, skilled in writing satirical doggerel with creative flair.",
+        default="You are Sunflower, a helpful assistant made by Sunbird AI who understands all Ugandan languages. You specialise in accurate translations, explanations, summaries and other language tasks.",
         help="The system prompt for the chat completion",
     )
 
