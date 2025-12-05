@@ -4,6 +4,7 @@ import argparse
 
 import modal
 from openai import OpenAI
+import base64
 
 
 class Colors:
@@ -66,7 +67,7 @@ def main():
     parser.add_argument(
         "--app-name",
         type=str,
-        default="Sunflower-14B-FP8",
+        default="Sunflower32b-Ultravox",
         help="A Modal App serving an OpenAI-compatible API",
     )
     parser.add_argument(
@@ -102,7 +103,7 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default="Who are you?",
+        default="Translate to English: ",
         help="The user prompt for the chat completion",
     )
     parser.add_argument(
@@ -111,6 +112,12 @@ def main():
         default="You are Sunflower, a helpful assistant made by Sunbird AI who understands all Ugandan languages. You specialise in accurate translations, explanations, summaries and other language tasks.",
         help="The system prompt for the chat completion",
     )
+    parser.add_argument(
+        "--audio_file",
+        type=str,
+        default="../sunflower-ultravox-vllm/audios/kibuuka_eng.mp3",
+        help="input audio file for the model.",
+    )
 
     # UI options
     parser.add_argument(
@@ -118,9 +125,6 @@ def main():
         dest="stream",
         action="store_false",
         help="Disable streaming of response chunks",
-    )
-    parser.add_argument(
-        "--chat", action="store_true", help="Enable interactive chat mode"
     )
 
     args = parser.parse_args()
@@ -170,65 +174,42 @@ def main():
 
     print(Colors.BOLD + "🧠: Using system prompt: " + args.system_prompt + Colors.END)
 
-    if args.chat:
-        print(
-            Colors.GREEN
-            + Colors.BOLD
-            + "\nEntering chat mode. Type 'bye' to end the conversation."
-            + Colors.END
-        )
-        while True:
-            user_input = input("\nYou: ")
-            if user_input.lower() in ["bye"]:
-                break
-
-            MAX_HISTORY = 10
-            if len(messages) > MAX_HISTORY:
-                messages = messages[:1] + messages[-MAX_HISTORY + 1 :]
-
-            messages.append({"role": "user", "content": user_input})
-
-            response = get_completion(client, model_id, messages, args)
-
-            if response:
-                if args.stream:
-                    # only stream assuming n=1
-                    print(Colors.BLUE + "\n🤖: ", end="")
-                    assistant_message = ""
-                    for chunk in response:
-                        if chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            print(content, end="")
-                            assistant_message += content
-                    print(Colors.END)
-                else:
-                    assistant_message = response.choices[0].message.content
-                    print(
-                        Colors.BLUE + "\n🤖:" + assistant_message + Colors.END,
-                        sep="",
-                    )
-
-                messages.append({"role": "assistant", "content": assistant_message})
+    if args.audio_file:
+        with open(args.audio_file, 'rb') as f:
+            audio_bytes = f.read()
+        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        content = [
+            {
+                "type": "text",
+                "text": args.prompt,
+            },
+            {
+                "type": "input_audio",
+                "input_audio": {"data": audio_b64, "format": "wav"},
+            },
+        ]
     else:
-        messages.append({"role": "user", "content": args.prompt})
-        print(Colors.GREEN + f"\nYou: {args.prompt}" + Colors.END)
-        response = get_completion(client, model_id, messages, args)
-        if response:
-            if args.stream:
-                print(Colors.BLUE + "\n🤖:", end="")
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        print(chunk.choices[0].delta.content, end="")
-                print(Colors.END)
-            else:
-                # only case where multiple completions are returned
-                for i, response in enumerate(response.choices):
-                    print(
-                        Colors.BLUE
-                        + f"\n🤖 Choice {i + 1}:{response.message.content}"
-                        + Colors.END,
-                        sep="",
-                    )
+        content = args.prompt
+
+    messages.append({"role": "user", "content": content})
+    print(Colors.GREEN + f"\nYou: {args.prompt}" + Colors.END)
+    response = get_completion(client, model_id, messages, args)
+    if response:
+        if args.stream:
+            print(Colors.BLUE + "\n🤖:", end="")
+            for chunk in response:
+                if chunk.choices[0].delta.content:
+                    print(chunk.choices[0].delta.content, end="")
+            print(Colors.END)
+        else:
+            # only case where multiple completions are returned
+            for i, response in enumerate(response.choices):
+                print(
+                    Colors.BLUE
+                    + f"\n🤖 Choice {i + 1}:{response.message.content}"
+                    + Colors.END,
+                    sep="",
+                )
 
 
 if __name__ == "__main__":
