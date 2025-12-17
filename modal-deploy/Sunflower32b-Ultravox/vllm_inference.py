@@ -70,7 +70,9 @@ def serve():
         "--port",
         str(VLLM_PORT),
         "--trust-remote-code",
-        "--max-model-len 4096"
+        "--max-model-len 4096",
+        "--enable-log-requests",
+        # "--enable-log-outputs",
     ]
 
     # enforce-eager disables both Torch compilation and CUDA graph capture
