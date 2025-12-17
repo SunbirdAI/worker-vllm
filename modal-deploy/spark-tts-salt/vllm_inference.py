@@ -1,5 +1,22 @@
+# Deploy the Chatterbox API with:
+#
+# ```shell
+# modal deploy vllm_inference.py
+# ```
+#
+# And query the endpoint with:
+#
+# ```shell
+# curl -X POST --get "https://sb-modal-ws--spark-tts-salt-chatterbox-generate.modal.run/Chatterbox/generate" \
+#   --data-urlencode "text=How are you" \
+#   --output output.wav
+# ```
+#
+# You'll receive a WAV file named `output.wav` containing the generated audio.
+
 import io
 import modal
+from typing import  List
 
 # ## Define a container image
 
@@ -11,9 +28,12 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .uv_pip_install(
-        "fastapi[standard]", "einx", "einops", "soundfile", "numpy", "torch"
-        "librosa", "vllm", "omegaconf", "huggingface_hub")
-    .run_commands("git clone https://github.com/SparkAudio/Spark-TTS")
+        "fastapi[standard]", "einx", "einops", "soundfile", "numpy", "torch",
+        "librosa", "vllm==0.12.0", "omegaconf", "huggingface_hub")
+    .run_commands(
+        "git clone https://github.com/SparkAudio/Spark-TTS /root/Spark-TTS"
+    )
+    .env({"PYTHONPATH": "/root/Spark-TTS"})
 )
 app = modal.App("spark-tts-salt", image=image)
 
@@ -21,21 +41,16 @@ app = modal.App("spark-tts-salt", image=image)
 # when the container runs. This includes audio processing and the TTS model itself.
 
 with image.imports():
-    import os
     import re
-    import sys
-    import time
     import numpy as np
     import torch
     import torchaudio as ta
-    from typing import Tuple, List, Optional
+    from typing import List
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
-    import soundfile as sf
-    import huggingface_hub
     from huggingface_hub import snapshot_download
     from fastapi.responses import StreamingResponse
-    sys.path.append('Spark-TTS')
+    from sparktts.models.audio_tokenizer import BiCodecTokenizer
 
 # cache model weights with Modal Volumes
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
@@ -102,8 +117,6 @@ class Chatterbox:
         print(f"✅ Tokenizer files downloaded to {HF_CACHE_DIR}")
 
         # Initialize the audio tokenizer
-        from sparktts.models.audio_tokenizer import BiCodecTokenizer
-
         print("Initializing audio tokenizer...")
         self.audio_tokenizer = BiCodecTokenizer(HF_CACHE_DIR)
         print("✅ Audio tokenizer initialized!")  
@@ -185,19 +198,4 @@ class Chatterbox:
         return [s.strip() for s in sentences if s.strip()]
 
 
-# Now deploy the Chatterbox API with:
-#
-# ```shell
-# modal deploy vllm_inference.py
-# ```
-#
-# And query the endpoint with:
-#
-# ```shell
-# curl -X POST --get "<YOUR-ENDPOINT-URL>" \
-#   --data-urlencode "text=How are you"
-#   --data-urlencode "speaker_id=241"
-#   --output output.wav
-# ```
-#
-# You'll receive a WAV file named `output.wav` containing the generated audio.
+
