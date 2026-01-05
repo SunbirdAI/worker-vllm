@@ -7,7 +7,7 @@
 # And query the endpoint with:
 #
 # ```shell
-# curl -X POST --get "https://sb-modal-ws--spark-tts-salt-chatterbox-generate.modal.run/Chatterbox/generate" \
+# curl -X POST --get "https://sb-modal-ws--spark-tts-salt-sparktts-generate.modal.run" \
 #   --data-urlencode "text=How are you" \
 #   --output output.wav
 # ```
@@ -28,11 +28,18 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .uv_pip_install(
-        "fastapi[standard]", "einx", "einops", "soundfile", "numpy", "torch",
-        "librosa", "vllm==0.12.0", "omegaconf", "huggingface_hub")
-    .run_commands(
-        "git clone https://github.com/SparkAudio/Spark-TTS /root/Spark-TTS"
+        "fastapi[standard]",
+        "einx",
+        "einops",
+        "soundfile",
+        "numpy",
+        "torch",
+        "librosa",
+        "vllm==0.12.0",
+        "omegaconf",
+        "huggingface_hub",
     )
+    .run_commands("git clone https://github.com/SparkAudio/Spark-TTS /root/Spark-TTS")
     .env({"PYTHONPATH": "/root/Spark-TTS"})
 )
 app = modal.App("spark-tts-salt", image=image)
@@ -44,7 +51,7 @@ with image.imports():
     import re
     import numpy as np
     import torch
-    import torchaudio as ta
+    import soundfile as sf
     from typing import List
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
@@ -75,7 +82,7 @@ HF_CACHE_DIR = "/root/.cache/huggingface"
     }
 )
 @modal.concurrent(max_inputs=10)
-class Chatterbox:
+class SparkTTS:
     GLOBAL_IDS_BY_SPEAKER = {
         241: [1755, 1265, 184, 3545, 2718, 2405, 3237, 1360, 3621, 1850, 37, 3382, 736,
             3380, 3131, 2036, 244, 2128, 254, 2550, 3181, 764, 1277, 502, 2941, 1993,
@@ -102,7 +109,7 @@ class Chatterbox:
         print("Loading Spark TTS model...")
         self.model = LLM(
             "Sunbird/spark-tts-salt",
-            enforce_eager=False,
+            enforce_eager=True,
             gpu_memory_utilization=0.5) # Leave some VRAM for the audio tokeniser
         print("✅ Model loaded successfully!")
 
@@ -119,6 +126,7 @@ class Chatterbox:
         # Initialize the audio tokenizer
         print("Initializing audio tokenizer...")
         self.audio_tokenizer = BiCodecTokenizer(HF_CACHE_DIR)
+        self.audio_tokenizer.model.to('cuda')
         print("✅ Audio tokenizer initialized!")  
 
     @modal.fastapi_endpoint(docs=True, method="POST")
@@ -130,39 +138,39 @@ class Chatterbox:
         texts = [t.strip() for t in texts if len(t.strip()) > 0]
 
         sampling_params = SamplingParams(temperature=temperature, max_tokens=2048)
-        
+
         global_tokens = self.GLOBAL_IDS_BY_SPEAKER[speaker_id]
-        
+
         prompts = []
         for text in texts:
             prompt = f"<|task_tts|><|start_content|>{speaker_id}: {text}<|end_content|><|start_global_token|>"
             prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_tokens]) + '<|end_global_token|><|start_semantic_token|>'
             prompts.append(prompt)
-        
+
         outputs = self.model.generate(
             prompts=prompts,
             sampling_params=sampling_params
         )
-        
+
         speech_segments = []
-        
+
         for i in range(len(outputs)):
             predicted_tokens = outputs[i].outputs[0].text
             semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", predicted_tokens)
             if not semantic_matches:
                 raise ValueError("No semantic tokens found in the generated output.")
-            
+
             pred_semantic_ids = (
                 torch.tensor([int(token) for token in semantic_matches]).long().unsqueeze(0)
             )
-            
+
             pred_global_ids = torch.Tensor([global_tokens]).long()
-            
+
             wav_np = self.audio_tokenizer.detokenize(
                 pred_global_ids.to(device), pred_semantic_ids.to(device)
             )
             speech_segments.append(wav_np)
-        
+
         result_wav = np.concatenate(speech_segments)    
 
         # Create an in-memory buffer to store the WAV file
@@ -170,7 +178,7 @@ class Chatterbox:
 
         # Save the generated audio to the buffer in WAV format
         # Uses the model's sample rate and WAV format
-        ta.save(buffer, result_wav, self.audio_tokenizer.config["sample_rate"], format="wav")
+        sf.write(buffer, result_wav, self.audio_tokenizer.config["sample_rate"], format='WAV')
 
         # Reset buffer position to the beginning for reading
         buffer.seek(0)
@@ -178,7 +186,7 @@ class Chatterbox:
         # Return the audio as a streaming response with appropriate MIME type.
         # This allows for browsers to playback audio directly.
         return StreamingResponse(
-            io.BytesIO(buffer.read()),
+            buffer,
             media_type="audio/wav",
         )
 
@@ -196,6 +204,3 @@ class Chatterbox:
         """
         sentences = re.split(r'(?<=[.!?])\s+', text.strip())
         return [s.strip() for s in sentences if s.strip()]
-
-
-
