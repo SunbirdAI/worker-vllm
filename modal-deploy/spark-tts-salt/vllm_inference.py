@@ -59,6 +59,7 @@ with image.imports():
     from huggingface_hub import snapshot_download
     from fastapi.responses import StreamingResponse
     from sparktts.models.audio_tokenizer import BiCodecTokenizer
+    import time
 
 # cache model weights with Modal Volumes
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
@@ -116,7 +117,7 @@ class SparkTTS:
         print("Loading Spark TTS model...")
         self.model = LLM(
             "Sunbird/spark-tts-salt",
-            enforce_eager=True,
+            enforce_eager=False,
             gpu_memory_utilization=0.5) # Leave some VRAM for the audio tokeniser
         print("✅ Model loaded successfully!")
 
@@ -138,6 +139,7 @@ class SparkTTS:
 
     @modal.fastapi_endpoint(docs=True, method="POST")
     def generate(self, text: str, speaker_id: int = 241, temperature: float = 0.6):
+        start_time = time.time()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
 
@@ -154,11 +156,14 @@ class SparkTTS:
             prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_tokens]) + '<|end_global_token|><|start_semantic_token|>'
             prompts.append(prompt)
 
+        gen_start = time.time()
         outputs = self.model.generate(
             prompts=prompts,
             sampling_params=sampling_params
         )
+        print(f"Model generation time: {time.time() - gen_start:.2f}s")
 
+        decode_start = time.time()
         speech_segments = []
 
         for i in range(len(outputs)):
@@ -178,8 +183,10 @@ class SparkTTS:
             )
             speech_segments.append(wav_np)
 
-        result_wav = np.concatenate(speech_segments)    
+        result_wav = np.concatenate(speech_segments)
+        print(f"Audio decoding time: {time.time() - decode_start:.2f}s")
 
+        save_start = time.time()
         # Create an in-memory buffer to store the WAV file
         buffer = io.BytesIO()
 
@@ -189,7 +196,9 @@ class SparkTTS:
 
         # Reset buffer position to the beginning for reading
         buffer.seek(0)
+        print(f"Audio saving time: {time.time() - save_start:.2f}s")
 
+        print(f"Total generation time: {time.time() - start_time:.2f}s")
         # Return the audio as a streaming response with appropriate MIME type.
         # This allows for browsers to playback audio directly.
         return StreamingResponse(
