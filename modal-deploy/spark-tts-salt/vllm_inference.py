@@ -8,7 +8,8 @@
 #
 # ```shell
 # curl -X POST --get "https://sb-modal-ws--spark-tts-salt-sparktts-generate.modal.run" \
-#   --data-urlencode "text=How are you" \
+#   --data-urlencode "text=I am a nurse who takes care of many people who have cancer." \
+#   --data-urlencode "speaker_id=248" \
 #   --output output.wav
 # ```
 #
@@ -83,6 +84,12 @@ HF_CACHE_DIR = "/root/.cache/huggingface"
 )
 @modal.concurrent(max_inputs=10)
 class SparkTTS:
+    # 241: Acholi (female)
+    # 242: Ateso (female)
+    # 243: Runyankore (female)
+    # 245: Lugbara (female)
+    # 246: Swahili (male)
+    # 248: Luganda (female)
     GLOBAL_IDS_BY_SPEAKER = {
         241: [1755, 1265, 184, 3545, 2718, 2405, 3237, 1360, 3621, 1850, 37, 3382, 736,
             3380, 3131, 2036, 244, 2128, 254, 2550, 3181, 764, 1277, 502, 2941, 1993,
