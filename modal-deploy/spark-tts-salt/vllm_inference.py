@@ -1,4 +1,4 @@
-# Deploy the Chatterbox API with:
+# Deploy the Spark-TTS-Salt model with vLLM:
 #
 # ```shell
 # modal deploy vllm_inference.py
@@ -20,10 +20,7 @@ import modal
 from typing import  List
 
 # ## Define a container image
-
 # We start with Modal's baseline `debian_slim` image and install the required packages.
-# - `chatterbox-tts`: The TTS model library
-# - `fastapi`: Web framework for creating the API endpoint
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
