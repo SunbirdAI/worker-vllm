@@ -60,8 +60,10 @@ with image.imports():
 
 # cache model weights with Modal Volumes
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
-HF_CACHE_DIR = "/root/.cache/huggingface"
+vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
+HF_CACHE_DIR = "/root/.cache/huggingface"
+VLLM_CACHE_DIR = "/root/.cache/vllm"
 
 # ## The TTS model class
 
@@ -78,6 +80,7 @@ HF_CACHE_DIR = "/root/.cache/huggingface"
     secrets=[modal.Secret.from_name("huggingface-read")],
     volumes={
         HF_CACHE_DIR: hf_cache_vol,
+        VLLM_CACHE_DIR: vllm_cache_vol,
     }
 )
 @modal.concurrent(max_inputs=10)
