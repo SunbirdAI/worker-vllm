@@ -60,6 +60,7 @@ with image.imports():
 
 # cache model weights with Modal Volumes
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
+# cache some of vLLM's compilation artifacts in a Modal Volume.
 vllm_cache_vol = modal.Volume.from_name("vllm-cache", create_if_missing=True)
 
 HF_CACHE_DIR = "/root/.cache/huggingface"
