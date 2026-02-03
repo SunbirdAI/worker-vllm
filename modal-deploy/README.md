@@ -34,8 +34,9 @@ modal setup
 
 6. test the deployed model with the client script, for example:
 ```
+cd Sunflower32b-Ultravox
 python client.py \
     --app-name Sunflower32b-Ultravox  \
     --prompt "Translate to English: " \
-    --audio_file "../sunflower-ultravox-vllm/audios/context_eng_1.wav"
+    --audio_file "../../sunflower-ultravox-vllm/audios/context_eng_1.wav"
 ```
