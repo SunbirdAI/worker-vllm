@@ -17,6 +17,7 @@
 from typing import Optional
 
 import modal
+from fastapi import Request
 
 MODEL_NAME = "Sunbird/asr-whisper-large-v3-salt"
 
@@ -30,6 +31,7 @@ hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=Tru
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
     .uv_pip_install(
         "torch==2.5.1",
         "transformers==4.47.1",
@@ -39,6 +41,8 @@ image = (
         "accelerate==1.2.1",
         "datasets==3.2.0",
         "torchaudio==2.5.1",
+        "fastapi==0.115.6",
+        "python-multipart==0.0.20",
     )
     .env({"HF_XET_HIGH_PERFORMANCE": "1", "HF_HUB_CACHE": HF_CACHE_DIR})
 )
@@ -53,7 +57,7 @@ app = modal.App(
 # ## Caching the model weights
 
 # We'll define a function to download the model and cache it in a volume.
-# You can `modal run` against this function prior to deploying the App.
+# You can `modal run batched_whisper.py::download_model` against this function prior to deploying the App.
 
 
 @app.function()
@@ -77,23 +81,12 @@ def download_model():
 # we start a new container. For more on storing model weights on Modal, see
 # [this guide](https://modal.com/docs/guide/model-weights).
 
-# We also define a `transcribe` method that uses the `@modal.batched` decorator to enable dynamic batching.
-# This allows us to invoke the function with individual audio samples, and the function will automatically batch them
-# together before running inference. Batching is critical for making good use of the GPU, since GPUs are designed
-# for running parallel operations at high throughput.
-
-# The `max_batch_size` parameter limits the maximum number of audio samples combined into a single batch.
-# We used a `max_batch_size` of `64`, the largest power-of-2 batch size that can be accommodated by the 24 A10G GPU memory.
-# This number will vary depending on the model and the GPU you are using.
-
-# The `wait_ms` parameter sets the maximum time to wait for more inputs before running the batched transcription.
-# To tune this parameter, you can set it to the target latency of your application minus the execution time of an inference batch.
-# This allows the latency of any request to stay within your target latency.
 
 
 @app.cls(
     gpu="a10g",  # Try using an A100 or H100 if you've got a large model or need big batches!
     max_containers=10,  # default max GPUs for Modal's free tier
+    scaledown_window=60 * 3,
 )
 class Model:
     @modal.enter()
@@ -109,28 +102,56 @@ class Model:
             torch_dtype=torch.float16,
         )
 
-    @modal.batched(max_batch_size=64, wait_ms=1000)
-    def transcribe(self, audio_samples):
+    # @modal.batched(max_batch_size=64, wait_ms=1000)
+    # def transcribe(self, audio_samples):
+    #     import time
+
+    #     generate_kwargs = {
+    #         "language": 'English', 
+    #         "task": "transcribe",
+    #         "num_beams": 1,
+    #     }
+
+    #     start = time.monotonic_ns()
+    #     print(f"Transcribing {len(audio_samples)} audio samples")
+    #     transcriptions = self.pipeline(
+    #         audio_samples, 
+    #         batch_size=len(audio_samples), 
+    #         generate_kwargs=generate_kwargs
+    #     )
+    #     end = time.monotonic_ns()
+    #     print(
+    #         f"Transcribed {len(audio_samples)} samples in {round((end - start) / 1e9, 2)}s"
+    #     )
+    #     return transcriptions
+
+    @modal.fastapi_endpoint(docs=True, method="POST")
+    async def transcribe(self, request: Request):
+        """
+        Web endpoint that accepts audio bytes and returns the transcription.
+        """
         import time
 
+        data = await request.body()
         generate_kwargs = {
-            "language": 'English', 
+            # "language": 'English', 
             "task": "transcribe",
             "num_beams": 1,
+            "return_timestamps": True,
         }
 
         start = time.monotonic_ns()
-        print(f"Transcribing {len(audio_samples)} audio samples")
         transcriptions = self.pipeline(
-            audio_samples, 
-            batch_size=len(audio_samples), 
-            generate_kwargs=generate_kwargs
+            [data], 
+            batch_size=1, 
+            generate_kwargs=generate_kwargs,
         )
         end = time.monotonic_ns()
         print(
-            f"Transcribed {len(audio_samples)} samples in {round((end - start) / 1e9, 2)}s"
+            f"Transcribed in {round((end - start) / 1e9, 2)}s"
         )
-        return transcriptions
+        
+        return {"text": transcriptions[0]["text"]}
 
 
 # ## Transcribe a dataset
