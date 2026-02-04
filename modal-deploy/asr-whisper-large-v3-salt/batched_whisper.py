@@ -18,10 +18,11 @@ from typing import Optional
 
 import modal
 
-MODEL_DIR = "/model"
-MODEL_NAME = "openai/whisper-large-v3"
-MODEL_REVISION = "afda370583db9c5359511ed5d989400a6199dfe1"
+MODEL_NAME = "Sunbird/asr-whisper-large-v3-salt"
 
+# cache model weights with Modal Volumes
+HF_CACHE_DIR = "/root/.cache/huggingface"
+hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 
 # ## Define a container image
 
@@ -37,15 +38,16 @@ image = (
         "soundfile==0.12.1",
         "accelerate==1.2.1",
         "datasets==3.2.0",
+        "torchaudio==2.5.1",
     )
-    .env({"HF_XET_HIGH_PERFORMANCE": "1", "HF_HUB_CACHE": MODEL_DIR})
+    .env({"HF_XET_HIGH_PERFORMANCE": "1", "HF_HUB_CACHE": HF_CACHE_DIR})
 )
 
-model_cache = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
 app = modal.App(
-    "example-batched-whisper",
+    "asr-whisper-large-v3-salt",
     image=image,
-    volumes={MODEL_DIR: model_cache},
+    secrets=[modal.Secret.from_name("huggingface-read")],
+    volumes={HF_CACHE_DIR: hf_cache_vol},
 )
 
 # ## Caching the model weights
@@ -62,7 +64,6 @@ def download_model():
     snapshot_download(
         MODEL_NAME,
         ignore_patterns=["*.pt", "*.bin"],  # Using safetensors
-        revision=MODEL_REVISION,
     )
     move_cache()
 
@@ -98,39 +99,33 @@ class Model:
     @modal.enter()
     def load_model(self):
         import torch
-        from transformers import (
-            AutoModelForSpeechSeq2Seq,
-            AutoProcessor,
-            pipeline,
-        )
-
-        self.processor = AutoProcessor.from_pretrained(MODEL_NAME)
-        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            use_safetensors=True,
-        ).to("cuda")
-
-        self.model.generation_config.language = "<|en|>"
+        from transformers import pipeline
 
         # Create a pipeline for preprocessing and transcribing speech data
         self.pipeline = pipeline(
             "automatic-speech-recognition",
-            model=self.model,
-            tokenizer=self.processor.tokenizer,
-            feature_extractor=self.processor.feature_extractor,
-            torch_dtype=torch.float16,
+            model=MODEL_NAME,
             device="cuda",
+            torch_dtype=torch.float16,
         )
 
     @modal.batched(max_batch_size=64, wait_ms=1000)
     def transcribe(self, audio_samples):
         import time
 
+        generate_kwargs = {
+            "language": 'English', 
+            "task": "transcribe",
+            "num_beams": 1,
+        }
+
         start = time.monotonic_ns()
         print(f"Transcribing {len(audio_samples)} audio samples")
-        transcriptions = self.pipeline(audio_samples, batch_size=len(audio_samples))
+        transcriptions = self.pipeline(
+            audio_samples, 
+            batch_size=len(audio_samples), 
+            generate_kwargs=generate_kwargs
+        )
         end = time.monotonic_ns()
         print(
             f"Transcribed {len(audio_samples)} samples in {round((end - start) / 1e9, 2)}s"
@@ -152,7 +147,7 @@ async def transcribe_hf_dataset(dataset_name):
     from datasets import load_dataset
 
     print("📂 Loading dataset", dataset_name)
-    ds = load_dataset(dataset_name, "clean", split="validation")
+    ds = load_dataset(dataset_name, "multispeaker-eng", split="test")
     print("📂 Dataset loaded")
     batched_whisper = Model()
     print("📣 Sending data for transcription")
@@ -169,6 +164,6 @@ async def transcribe_hf_dataset(dataset_name):
 @app.local_entrypoint()
 async def main(dataset_name: Optional[str] = None):
     if dataset_name is None:
-        dataset_name = "hf-internal-testing/librispeech_asr_dummy"
+        dataset_name = "Sunbird/salt"
     for result in transcribe_hf_dataset.remote_gen(dataset_name):
         print(result["text"])
