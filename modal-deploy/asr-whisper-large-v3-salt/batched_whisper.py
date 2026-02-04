@@ -1,18 +1,16 @@
-# # Fast Whisper inference using dynamic batching
-
-# In this example, we demonstrate how to run [dynamically batched inference](https://modal.com/docs/guide/dynamic-batching)
-# for OpenAI's speech recognition model, [Whisper](https://openai.com/index/whisper/), on Modal.
-# Batching multiple audio samples together or batching chunks of a single audio sample can help to achieve a 2.8x increase
-# in inference throughput on an A10G!
-
-# We will be running the [Whisper Large V3](https://huggingface.co/openai/whisper-large-v3) model.
-# To run [any of the other HuggingFace Whisper models](https://huggingface.co/models?search=openai/whisper),
-# simply replace the `MODEL_NAME` and `MODEL_REVISION` variables.
-
-# ## Setup
-
-# Let's start by importing the Modal client and defining the model that we want to serve.
-
+# Deploy the asr-whisper-large-v3-salt model with Modal:
+#
+# ```shell
+# modal deploy batched_whisper.py
+# ```
+#
+# And query the endpoint with:
+#
+# ```shell
+# python client.py \
+#   --url https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run \
+#   --audio "../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
+# ```
 
 from typing import Optional
 
@@ -26,9 +24,6 @@ HF_CACHE_DIR = "/root/.cache/huggingface"
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 
 # ## Define a container image
-
-# We’ll start with Modal's baseline `debian_slim` image and install the relevant libraries.
-
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
@@ -58,8 +53,6 @@ app = modal.App(
 
 # We'll define a function to download the model and cache it in a volume.
 # You can `modal run batched_whisper.py::download_model` against this function prior to deploying the App.
-
-
 @app.function()
 def download_model():
     from huggingface_hub import snapshot_download
@@ -80,8 +73,6 @@ def download_model():
 # The weights will be loaded from the Hugging Face cache volume so that we don't need to download them when
 # we start a new container. For more on storing model weights on Modal, see
 # [this guide](https://modal.com/docs/guide/model-weights).
-
-
 
 @app.cls(
     gpu="a10g",  # Try using an A100 or H100 if you've got a large model or need big batches!
@@ -151,7 +142,8 @@ class Model:
             f"Transcribed in {round((end - start) / 1e9, 2)}s"
         )
         
-        return {"text": transcriptions[0]["text"]}
+        return transcriptions
+        # return {"text": transcriptions[0]["text"]}
 
 
 # ## Transcribe a dataset
@@ -163,17 +155,17 @@ class Model:
 # This allows us to invoke the batched transcription method on each audio sample in parallel.
 
 
-@app.function()
-async def transcribe_hf_dataset(dataset_name):
-    from datasets import load_dataset
+# @app.function()
+# async def transcribe_hf_dataset(dataset_name):
+#     from datasets import load_dataset
 
-    print("📂 Loading dataset", dataset_name)
-    ds = load_dataset(dataset_name, "multispeaker-eng", split="test")
-    print("📂 Dataset loaded")
-    batched_whisper = Model()
-    print("📣 Sending data for transcription")
-    async for transcription in batched_whisper.transcribe.map.aio(ds["audio"]):
-        yield transcription
+#     print("📂 Loading dataset", dataset_name)
+#     ds = load_dataset(dataset_name, "multispeaker-eng", split="test")
+#     print("📂 Dataset loaded")
+#     batched_whisper = Model()
+#     print("📣 Sending data for transcription")
+#     async for transcription in batched_whisper.transcribe.map.aio(ds["audio"]):
+#         yield transcription
 
 
 # ## Run the model
@@ -182,9 +174,9 @@ async def transcribe_hf_dataset(dataset_name):
 # to run the transcription. You can run this locally with `modal run batched_whisper.py`.
 
 
-@app.local_entrypoint()
-async def main(dataset_name: Optional[str] = None):
-    if dataset_name is None:
-        dataset_name = "Sunbird/salt"
-    for result in transcribe_hf_dataset.remote_gen(dataset_name):
-        print(result["text"])
+# @app.local_entrypoint()
+# async def main(dataset_name: Optional[str] = None):
+#     if dataset_name is None:
+#         dataset_name = "Sunbird/salt"
+#     for result in transcribe_hf_dataset.remote_gen(dataset_name):
+#         print(result["text"])
