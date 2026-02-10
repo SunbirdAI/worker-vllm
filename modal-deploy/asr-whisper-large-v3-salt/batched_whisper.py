@@ -11,6 +11,14 @@
 #   --url https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run \
 #   --audio "../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
 # ```
+#
+# Or using `curl`:
+#
+# ```shell
+curl -X POST "https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run?language=eng" \
+  --header "Content-Type: application/octet-stream" \
+  --data-binary "@../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
+# ```
 
 from typing import Optional
 
@@ -83,6 +91,7 @@ class Model:
     @modal.enter()
     def load_model(self):
         import torch
+        import transformers
         from transformers import pipeline
 
         # Create a pipeline for preprocessing and transcribing speech data
@@ -92,6 +101,8 @@ class Model:
             device="cuda",
             torch_dtype=torch.float16,
         )
+
+        self.processor = transformers.WhisperProcessor.from_pretrained(MODEL_NAME)
 
     # @modal.batched(max_batch_size=64, wait_ms=1000)
     # def transcribe(self, audio_samples):
@@ -116,8 +127,65 @@ class Model:
     #     )
     #     return transcriptions
 
+    def get_language_code(self, language: str, processor) -> str:
+        """
+        Returns the correct language code for a given language using the provided processor.
+
+        Parameters:
+        language (str): The name or code of the language (e.g., "English", "eng", "Luganda", "lug", etc.).
+        processor: An object that contains a tokenizer used to decode language ID tokens.
+
+        Returns:
+        str: The corresponding language code.
+
+        Raises:
+        ValueError: If the language is not supported.
+        """
+        language_codes = {
+            "English": "eng",
+            "Luganda": "lug",
+            "Runyankole": "nyn",
+            "Acholi": "ach",
+            "Ateso": "teo",
+            "Lugbara": "lgg",
+            "Swahili": "swa",
+            "Kinyarwanda": "kin",
+            "Lusoga": "xog",
+            "Lumasaba": "myx",
+        }
+
+        code_to_language = {v: k for k, v in language_codes.items()}
+        standardized_language = (
+            language.capitalize() if len(language) > 3 else language.lower()
+        )
+
+        if standardized_language in language_codes:
+            code = language_codes[standardized_language]
+        elif standardized_language in code_to_language:
+            code = standardized_language
+        else:
+            raise ValueError(f"Language '{language}' is not supported.")
+
+        language_id_tokens = {
+            "eng": 50259,
+            "ach": 50357,
+            "lgg": 50356,
+            "lug": 50355,
+            "nyn": 50354,
+            "teo": 50353,
+            "xog": 50352,
+            "kin": 50350,
+            "myx": 50349,
+            "swa": 50318,
+        }
+
+        token = language_id_tokens[code]
+        language_code = processor.tokenizer.decode(token)[2:-2]
+
+        return language_code
+
     @modal.fastapi_endpoint(docs=True, method="POST")
-    async def transcribe(self, request: Request):
+    async def transcribe(self, request: Request, language: Optional[str] = None):
         """
         Web endpoint that accepts audio bytes and returns the transcription.
         """
@@ -125,11 +193,12 @@ class Model:
 
         data = await request.body()
         generate_kwargs = {
-            # "language": 'English', 
             "task": "transcribe",
             "num_beams": 1,
             "return_timestamps": True,
         }
+        if language:
+            generate_kwargs["language"] = self.get_language_code(language, self.processor)
 
         start = time.monotonic_ns()
         transcriptions = self.pipeline(
