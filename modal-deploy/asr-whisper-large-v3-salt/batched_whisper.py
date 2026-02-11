@@ -12,12 +12,29 @@
 #   --audio "../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
 # ```
 #
+# With an optional language argument:
+#
+# ```shell
+# python client.py \
+#   --url https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run \
+#   --audio "../../sunflower-ultravox-vllm/audios/context_eng_6.wav" \
+#   --language eng
+# ```
+#
 # Or using `curl`:
 #
 # ```shell
-curl -X POST "https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run?language=eng" \
-  --header "Content-Type: application/octet-stream" \
-  --data-binary "@../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
+# curl -X POST "https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run" \
+#   --header "Content-Type: application/octet-stream" \
+#   --data-binary "@../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
+# ```
+#
+# With an optional language query parameter:
+#
+# ```shell
+# curl -X POST "https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run?language=eng" \
+#   --header "Content-Type: application/octet-stream" \
+#   --data-binary "@../../sunflower-ultravox-vllm/audios/context_eng_6.wav"
 # ```
 
 from typing import Optional
