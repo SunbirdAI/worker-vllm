@@ -142,7 +142,9 @@ class SparkTTS:
     def generate(self, text: str, speaker_id: int = 241, temperature: float = 0.6):
         start_time = time.time()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {device}")
+        print(f"input text: {text}")
+        print(f"speaker_id: {speaker_id}")
+        print(f"temperature: {temperature}")
 
         texts = self.chunk_text_simple(text)
         texts = [t.strip() for t in texts if len(t.strip()) > 0]
