@@ -76,7 +76,7 @@ VLLM_CACHE_DIR = "/root/.cache/vllm"
 
 @app.cls(
     gpu="L4",
-    scaledown_window=60 * 3,
+    scaledown_window=60 * 5,
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-read")],
     volumes={
