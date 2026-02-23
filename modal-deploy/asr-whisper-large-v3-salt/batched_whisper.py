@@ -7,8 +7,8 @@
 #
 # Query the endpoint:
 # ```shell
-# curl -X POST "https://sb-modal-ws--asr-whisper-large-v3-salt-model-transcribe.modal.run" \
-#   --data-binary @audio.wav \
+# curl -X POST "https://thu-58148--asr-whisper-large-v3-salt-model-transcribe.modal.run" \
+#   --data-binary "@../../sunflower-ultravox-vllm/audios/context_eng_6.wav" \
 #   -H "Content-Type: application/octet-stream"
 # ```
 
@@ -88,9 +88,9 @@ def download_model():
 
 
 @app.cls(
-    gpu="a10g",  # Try using an A100 or H100 if you've got a large model or need big batches!
-    max_containers=10,  # default max GPUs for Modal's free tier
-    scaledown_window=60 * 3,
+    gpu="A10",  # Try using an A100 or H100 if you've got a large model or need big batches!
+    max_containers=1,  # default max GPUs for Modal's free tier
+    scaledown_window=60 * 2,
     # enable_memory_snapshot=True,
 )
 @modal.concurrent(max_inputs=10)
@@ -110,10 +110,10 @@ class Model:
         print("Loading Whisper model with vLLM...")
         self.model = LLM(
             MODEL_NAME,
-            enforce_eager=True,
-            gpu_memory_utilization=0.5,
+            enforce_eager=False,
+            gpu_memory_utilization=0.8,
             max_model_len=448,
-            max_num_seqs=5,
+            max_num_seqs=10,
             limit_mm_per_prompt={"audio": 1},
         )
         print("✅ Model loaded successfully!")
