@@ -175,7 +175,7 @@ class Model:
 # We use [`map.aio`](https://modal.com/docs/reference/modal.Function#map) to asynchronously map over the audio files.
 # This allows us to invoke the batched transcription method on each audio sample in parallel.
 
-# invoke with web url, e.g. https://thu-58148--asr-whisper-large-v3-salt-transcribe-hf-dataset.modal.run
+# invoke with web url, e.g. curl https://thu-58148--asr-whisper-large-v3-salt-transcribe-hf-dataset.modal.run
 # then check the logs in https://modal.com/apps
 
 @app.function()
@@ -194,7 +194,7 @@ async def transcribe_hf_dataset(dataset_name="Sunbird/salt", subset="multispeake
         print(transcription["text"])
         # yield transcription
     map_end = time.monotonic_ns()
-    print(f"⏱️ Total map transcription time: {round((map_end - map_start) / 1e9, 2)}s")
+    print(f"⏱️ Total transcription time for {len(ds['audio'])} samples: {round((map_end - map_start) / 1e9, 2)}s")
 
 
 # ## Run the model
