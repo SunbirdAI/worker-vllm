@@ -93,7 +93,7 @@ def download_model():
     scaledown_window=60 * 2,
     # enable_memory_snapshot=True,
 )
-@modal.concurrent(max_inputs=10)
+@modal.concurrent(max_inputs=32)
 class Model:
     @modal.enter()
     def load_model(self):
@@ -113,7 +113,7 @@ class Model:
             enforce_eager=False,
             gpu_memory_utilization=0.8,
             max_model_len=448,
-            max_num_seqs=10,
+            max_num_seqs=32,
             limit_mm_per_prompt={"audio": 1},
         )
         print("✅ Model loaded successfully!")
@@ -141,30 +141,25 @@ class Model:
     #     )
     #     return transcriptions
 
-    @modal.fastapi_endpoint(docs=True, method="POST")
-    async def transcribe(self, request: Request):
+    @modal.method()
+    async def transcribe(self, audio):
         """
         Web endpoint that accepts audio bytes and returns the transcription.
         """
-        data = await request.body()
         
         # Load audio from bytes
-        audio, sr = librosa.load(io.BytesIO(data), sr=16000)
         
         start = time.monotonic_ns()
         
-        # Whisper prompt format
-        prompt = "<|startoftranscript|>"
-        
         # Prepare input with multimodal data
         inputs = {
-            "prompt": prompt,
+            "prompt": "<|startoftranscript|>",
             "multi_modal_data": {
-                "audio": [(audio, sr)]
+                "audio": [(audio["array"], audio["sampling_rate"])]
             }
         }
         
-        sampling_params = SamplingParams(temperature=0.0, max_tokens=256)
+        sampling_params = SamplingParams(temperature=0.0, max_tokens=448)
         
         # Use vLLM generate
         outputs = self.model.generate([inputs], sampling_params=sampling_params)
@@ -177,24 +172,29 @@ class Model:
 
 # ## Transcribe a dataset
 
-# In this example, we use the [librispeech_asr_dummy dataset](https://huggingface.co/datasets/hf-internal-testing/librispeech_asr_dummy)
-# from Hugging Face's Datasets library to test the model.
-
 # We use [`map.aio`](https://modal.com/docs/reference/modal.Function#map) to asynchronously map over the audio files.
 # This allows us to invoke the batched transcription method on each audio sample in parallel.
 
+# invoke with web url, e.g. https://thu-58148--asr-whisper-large-v3-salt-transcribe-hf-dataset.modal.run
+# then check the logs in https://modal.com/apps
 
 @app.function()
-async def transcribe_hf_dataset(dataset_name):
+@modal.fastapi_endpoint()
+async def transcribe_hf_dataset(dataset_name="Sunbird/salt", subset="multispeaker-eng", split="test"):
     from datasets import load_dataset
 
     print("📂 Loading dataset", dataset_name)
-    ds = load_dataset(dataset_name, "multispeaker-eng", split="test")
+    ds = load_dataset(dataset_name, subset, split=split)
     print("📂 Dataset loaded")
     batched_whisper = Model()
     print("📣 Sending data for transcription")
+    import time
+    map_start = time.monotonic_ns()
     async for transcription in batched_whisper.transcribe.map.aio(ds["audio"]):
-        yield transcription
+        print(transcription["text"])
+        # yield transcription
+    map_end = time.monotonic_ns()
+    print(f"⏱️ Total map transcription time: {round((map_end - map_start) / 1e9, 2)}s")
 
 
 # ## Run the model
@@ -203,9 +203,9 @@ async def transcribe_hf_dataset(dataset_name):
 # to run the transcription. You can run this locally with `modal run batched_whisper.py`.
 
 
-@app.local_entrypoint()
-async def main(dataset_name: Optional[str] = None):
-    if dataset_name is None:
-        dataset_name = "Sunbird/salt"
-    for result in transcribe_hf_dataset.remote_gen(dataset_name):
-        print(result["text"])
+# @app.local_entrypoint()
+# async def main(dataset_name: Optional[str] = None):
+#     if dataset_name is None:
+#         dataset_name = "Sunbird/salt"
+#     for result in transcribe_hf_dataset.remote_gen(dataset_name):
+#         print(result["text"])
