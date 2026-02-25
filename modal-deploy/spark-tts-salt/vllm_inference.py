@@ -51,10 +51,13 @@ with image.imports():
     import torch
     import soundfile as sf
     from typing import List
-    from vllm import LLM
+    import uuid
+    import asyncio
+    from vllm.engine.arg_utils import AsyncEngineArgs
+    from vllm.engine.async_llm_engine import AsyncLLMEngine
     from vllm.sampling_params import SamplingParams
     from huggingface_hub import snapshot_download
-    from fastapi.responses import StreamingResponse
+    from fastapi import Response
     from sparktts.models.audio_tokenizer import BiCodecTokenizer
     import time
 
@@ -76,6 +79,7 @@ VLLM_CACHE_DIR = "/root/.cache/vllm"
 
 @app.cls(
     gpu="L4",
+    max_containers=10,
     scaledown_window=60 * 5,
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-read")],
@@ -84,7 +88,7 @@ VLLM_CACHE_DIR = "/root/.cache/vllm"
         VLLM_CACHE_DIR: vllm_cache_vol,
     }
 )
-@modal.concurrent(max_inputs=10)
+@modal.concurrent(max_inputs=100)
 class SparkTTS:
     # 241: Acholi (female)
     # 242: Ateso (female)
@@ -116,10 +120,13 @@ class SparkTTS:
     @modal.enter()
     def load(self):
         print("Loading Spark TTS model...")
-        self.model = LLM(
-            "Sunbird/spark-tts-salt",
+        engine_args = AsyncEngineArgs(
+            model="Sunbird/spark-tts-salt",
             enforce_eager=False,
-            gpu_memory_utilization=0.5) # Leave some VRAM for the audio tokeniser
+            gpu_memory_utilization=0.8,
+            max_num_seqs=100,
+        ) # Leave some VRAM for the audio tokeniser
+        self.model = AsyncLLMEngine.from_engine_args(engine_args)
         print("✅ Model loaded successfully!")
 
         # Download tokenizer model files
@@ -139,7 +146,7 @@ class SparkTTS:
         print("✅ Audio tokenizer initialized!")  
 
     @modal.fastapi_endpoint(docs=True, method="POST")
-    def generate(self, text: str, speaker_id: int = 241, temperature: float = 0.6):
+    async def generate(self, text: str, speaker_id: int = 241, temperature: float = 0.6):
         start_time = time.time()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"input text: {text}")
@@ -160,10 +167,16 @@ class SparkTTS:
             prompts.append(prompt)
 
         gen_start = time.time()
-        outputs = self.model.generate(
-            prompts=prompts,
-            sampling_params=sampling_params
-        )
+        
+        async def generate_chunk(prompt):
+            request_id = str(uuid.uuid4())
+            results_generator = self.model.generate(prompt, sampling_params, request_id)
+            final_output = None
+            async for request_output in results_generator:
+                final_output = request_output
+            return final_output
+
+        outputs = await asyncio.gather(*[generate_chunk(p) for p in prompts])
         print(f"Model generation time: {time.time() - gen_start:.2f}s")
 
         decode_start = time.time()
@@ -181,7 +194,8 @@ class SparkTTS:
 
             pred_global_ids = torch.Tensor([global_tokens]).long()
 
-            wav_np = self.audio_tokenizer.detokenize(
+            wav_np = await asyncio.to_thread(
+                self.audio_tokenizer.detokenize,
                 pred_global_ids.to(device), pred_semantic_ids.to(device)
             )
             speech_segments.append(wav_np)
@@ -202,10 +216,10 @@ class SparkTTS:
         print(f"Audio saving time: {time.time() - save_start:.2f}s")
 
         print(f"Total generation time: {time.time() - start_time:.2f}s")
-        # Return the audio as a streaming response with appropriate MIME type.
-        # This allows for browsers to playback audio directly.
-        return StreamingResponse(
-            buffer,
+        # Return the audio as a direct Response with appropriate MIME type.
+        # This completely avoids Uvicorn's chunked file iterator bottleneck.
+        return Response(
+            content=buffer.getvalue(),
             media_type="audio/wav",
         )
 
