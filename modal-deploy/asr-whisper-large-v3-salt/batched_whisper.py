@@ -227,6 +227,7 @@ class Model:
         print(
             f"Transcribed in {round((end - start) / 1e9, 2)}s"
         )
+        print(transcriptions)
         
         return transcriptions
         # return {"text": transcriptions[0]["text"]}
