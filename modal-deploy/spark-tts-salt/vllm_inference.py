@@ -40,7 +40,7 @@ image = (
     .run_commands("git clone https://github.com/SparkAudio/Spark-TTS /root/Spark-TTS")
     .env({"PYTHONPATH": "/root/Spark-TTS"})
 )
-app = modal.App("spark-tts-salt", image=image)
+app = modal.App("spark-tts-salt-job-queue", image=image)
 
 # Import the required libraries within the image context to ensure they're available
 # when the container runs. This includes audio processing and the TTS model itself.
@@ -60,6 +60,9 @@ with image.imports():
     from fastapi import Response
     from sparktts.models.audio_tokenizer import BiCodecTokenizer
     import time
+
+# dictionary to hold job status
+job_status = modal.Dict.from_name("spark-tts-job-status", create_if_missing=True)
 
 # cache model weights with Modal Volumes
 hf_cache_vol = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
@@ -145,8 +148,11 @@ class SparkTTS:
         self.audio_tokenizer.model.to('cuda')
         print("✅ Audio tokenizer initialized!")  
 
-    @modal.fastapi_endpoint(docs=True, method="POST")
+    @modal.method()
     async def generate(self, text: str, speaker_id: int = 241, temperature: float = 0.6):
+        # Mark as processing now that the model is loaded and we have started the method
+        await job_status.put.aio(modal.current_function_call_id(), "processing")
+
         start_time = time.time()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"input text: {text}")
@@ -216,12 +222,8 @@ class SparkTTS:
         print(f"Audio saving time: {time.time() - save_start:.2f}s")
 
         print(f"Total generation time: {time.time() - start_time:.2f}s")
-        # Return the audio as a direct Response with appropriate MIME type.
-        # This completely avoids Uvicorn's chunked file iterator bottleneck.
-        return Response(
-            content=buffer.getvalue(),
-            media_type="audio/wav",
-        )
+        # Return raw audio bytes
+        return buffer.getvalue()
 
     def chunk_text_simple(self, text: str) -> List[str]:
         """
@@ -237,3 +239,45 @@ class SparkTTS:
         """
         sentences = re.split(r'(?<=[.!?])\s+', text.strip())
         return [s.strip() for s in sentences if s.strip()]
+
+
+@app.function(min_containers=1)
+@modal.concurrent(max_inputs=100)
+@modal.asgi_app()
+def fastapi_app():
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import JSONResponse, Response
+
+    web_app = FastAPI(title="Spark-TTS Job Queue API")
+
+    @web_app.post("/submit")
+    async def submit_job(text: str, speaker_id: int = 241, temperature: float = 0.6):
+        # We spawn the workload and immediately return the corresponding ID
+        call = await SparkTTS().generate.spawn.aio(text, speaker_id, temperature)
+        return {"call_id": call.object_id}
+
+    @web_app.get("/result/{call_id}")
+    async def get_job_result(call_id: str):
+        function_call = modal.FunctionCall.from_id(call_id)
+        
+        try:
+            # We must set a 0-second timeout to check status instantly without blocking the server
+            result_bytes = await function_call.get.aio(timeout=0)
+            # The job finished! Remove status from dict and return the WAV response.
+            if await job_status.contains.aio(call_id):
+                await job_status.pop.aio(call_id)
+
+            return Response(
+                content=result_bytes,
+                media_type="audio/wav",
+            )
+            
+        except modal.exception.OutputExpiredError:
+            # The job results are gone from Modal
+            return JSONResponse(content={"error": "Job expired or not found."}, status_code=404)
+        except TimeoutError:
+            # Job is still running. Let's find out if it is loading the model or generating audio.
+            status = await job_status.get.aio(call_id, "loading")
+            return JSONResponse(content={"status": status}, status_code=202)
+
+    return web_app
