@@ -7,6 +7,7 @@ using **vLLM**, exposing both blocking and streaming HTTP endpoints.
 Files:
 
 - [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_modal.py) — Modal app (image, volume, vLLM class, FastAPI endpoints).
+- [fastapi_app.py](fastapi_app.py) — standalone FastAPI app that proxies to the deployed Modal class.
 - [client.py](client.py) — CLI client for HTTP, streaming, and direct Modal calls.
 - [sunflower_grpo_combined_inference.ipynb](sunflower_grpo_combined_inference.ipynb) — original reference notebook.
 
@@ -106,7 +107,69 @@ curl -N -X POST $SUNFLOWER_URL/generate_stream \
   -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
 ```
 
-## 6. Configuration knobs
+## 6. Run the standalone FastAPI proxy app
+
+As an alternative to calling the Modal-hosted `web` endpoint directly, you can
+run [fastapi_app.py](fastapi_app.py) locally (or in your own container / VM).
+It resolves the deployed Modal class at startup and proxies requests through
+the Modal Python SDK.
+
+### Endpoints
+
+| Method | Path               | Description                                                  |
+|--------|--------------------|--------------------------------------------------------------|
+| GET    | `/health`          | Liveness check; reports bound Modal app / class              |
+| POST   | `/generate`        | Blocking generation → `{"response": "..."}`                  |
+| POST   | `/generate_stream` | Server-Sent Events stream of `{"delta": "..."}` then `[DONE]`|
+
+Request body for `/generate` and `/generate_stream`:
+
+```json
+{
+  "instruction": "Translate to luganda: Good morning",
+  "temperature": 0.6,
+  "max_tokens": 1024
+}
+```
+
+### Run locally
+
+```bash
+uv add fastapi uvicorn modal
+uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Requires `uv run modal setup` to have completed so the Modal SDK can
+authenticate. Override which deployment it talks to via env vars:
+
+```bash
+export MODAL_APP_NAME=sunflower-grpo-vllm
+export MODAL_CLASS_NAME=SunflowerVLLM
+```
+
+### Test it
+
+```bash
+curl http://localhost:8000/health
+
+curl -X POST http://localhost:8000/generate \
+  -H 'content-type: application/json' \
+  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+
+curl -N -X POST http://localhost:8000/generate_stream \
+  -H 'content-type: application/json' \
+  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+```
+
+Or point [client.py](client.py) at the local server:
+
+```bash
+export SUNFLOWER_URL=http://localhost:8000
+uv run client.py http   "Translate to luganda: Good morning" 0.2
+uv run client.py stream "Translate to luganda: Good morning" 0.2
+```
+
+## 7. Configuration knobs
 
 Edit constants at the top of [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_modal.py):
 
@@ -118,7 +181,7 @@ Edit constants at the top of [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_
 | `scaledown_window` | `300` (5 min)  | Idle time before container spins down. |
 | `@modal.concurrent(max_inputs=8)` | `8` | vLLM batches concurrent requests on one warm replica. |
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 - **OOM at engine init** — drop `gpu_memory_utilization` to `0.85` or move to `A100-80GB` / `L40S`.
 - **Gated repo 401** — confirm the `huggingface` Modal secret has a token with access to the two `jq/...` repos.
