@@ -109,18 +109,19 @@ curl -N -X POST $SUNFLOWER_URL/generate_stream \
 
 ## 6. Run the standalone FastAPI proxy app
 
-As an alternative to calling the Modal-hosted `web` endpoint directly, you can
-run [fastapi_app.py](fastapi_app.py) locally (or in your own container / VM).
-It resolves the deployed Modal class at startup and proxies requests through
-the Modal Python SDK.
+[fastapi_app.py](fastapi_app.py) is a thin **HTTP proxy** sitting in front of
+the Modal-hosted `web` endpoint. The Modal app already exposes
+`/generate`, `/generate_stream`, and `/health` directly — the proxy is there so
+we can layer **auth, rate limiting, access logging, custom domains, and
+request shaping** without redeploying the inference service.
 
 ### Endpoints
 
-| Method | Path               | Description                                                  |
-|--------|--------------------|--------------------------------------------------------------|
-| GET    | `/health`          | Liveness check; reports bound Modal app / class              |
-| POST   | `/generate`        | Blocking generation → `{"response": "..."}`                  |
-| POST   | `/generate_stream` | Server-Sent Events stream of `{"delta": "..."}` then `[DONE]`|
+| Method | Path               | Description                                                       |
+|--------|--------------------|-------------------------------------------------------------------|
+| GET    | `/health`          | Liveness for the proxy + readiness probe of the upstream          |
+| POST   | `/generate`        | Blocking generation → `{"response": "..."}`                       |
+| POST   | `/generate_stream` | Server-Sent Events stream of `{"delta": "..."}` chunks then `[DONE]` |
 
 Request body for `/generate` and `/generate_stream`:
 
@@ -132,19 +133,41 @@ Request body for `/generate` and `/generate_stream`:
 }
 ```
 
+### Features
+
+- **Pure HTTP proxy** built on `httpx.AsyncClient` — no Modal SDK dependency.
+- **Optional bearer auth** via `SUNFLOWER_API_KEY` env var (no-op if unset).
+- **Rate limiting** (`slowapi`) — defaults to **100 requests/minute** and
+  **1000 requests/day** per client IP. Returns HTTP 429 when exceeded.
+- **Access logging** with per-request `x-request-id` header and timing.
+- **Streaming passthrough** of upstream SSE (no buffering).
+- All defaults configurable via env vars.
+
+### Configuration (env vars)
+
+| Variable                 | Default                                                          | Notes |
+|--------------------------|------------------------------------------------------------------|-------|
+| `SUNFLOWER_UPSTREAM_URL` | `https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run`        | Modal `web` endpoint to proxy. |
+| `SUNFLOWER_API_KEY`      | _(unset)_                                                        | If set, clients must send `Authorization: Bearer <key>`. |
+| `UPSTREAM_TIMEOUT`       | `600`                                                            | Per-request timeout (seconds). |
+| `RATE_LIMIT_PER_MINUTE`  | `100/minute`                                                     | Per-IP per-minute limit. |
+| `RATE_LIMIT_PER_DAY`     | `1000/day`                                                       | Per-IP per-day limit. |
+| `RATE_LIMIT_STORAGE_URI` | `memory://`                                                      | Use `redis://...` for multi-replica deployments. |
+| `LOG_LEVEL`              | `INFO`                                                           | Standard Python logging level. |
+
 ### Run locally
 
 ```bash
-uv add fastapi uvicorn modal
+uv add fastapi uvicorn httpx slowapi
 uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Requires `uv run modal setup` to have completed so the Modal SDK can
-authenticate. Override which deployment it talks to via env vars:
+Optional auth + custom limits:
 
 ```bash
-export MODAL_APP_NAME=sunflower-grpo-vllm
-export MODAL_CLASS_NAME=SunflowerVLLM
+export SUNFLOWER_API_KEY=secret123
+export RATE_LIMIT_PER_MINUTE=60/minute
+export RATE_LIMIT_PER_DAY=500/day
 ```
 
 ### Test it
@@ -153,21 +176,32 @@ export MODAL_CLASS_NAME=SunflowerVLLM
 curl http://localhost:8000/health
 
 curl -X POST http://localhost:8000/generate \
+  -H 'authorization: Bearer secret123' \
   -H 'content-type: application/json' \
   -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
 
 curl -N -X POST http://localhost:8000/generate_stream \
+  -H 'authorization: Bearer secret123' \
   -H 'content-type: application/json' \
   -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
 ```
 
-Or point [client.py](client.py) at the local server:
+Or point [client.py](client.py) at the local proxy:
 
 ```bash
 export SUNFLOWER_URL=http://localhost:8000
 uv run client.py http   "Translate to luganda: Good morning" 0.2
 uv run client.py stream "Translate to luganda: Good morning" 0.2
 ```
+
+### Notes on rate limiting
+
+- The default `memory://` backend keeps counters per-process. If you run
+  multiple uvicorn workers or replicas, set `RATE_LIMIT_STORAGE_URI` to a
+  Redis URL (e.g. `redis://localhost:6379`) so all workers share state.
+- `slowapi` uses the client IP via `get_remote_address`. Behind a reverse
+  proxy / load balancer, ensure `X-Forwarded-For` is forwarded and consider
+  swapping the key function to read it.
 
 ## 7. Configuration knobs
 
