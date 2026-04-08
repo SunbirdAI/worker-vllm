@@ -72,7 +72,7 @@ log = logging.getLogger("sunflower-proxy")
 # ---------------------------------------------------------------------------
 class GenerateRequest(BaseModel):
     instruction: str = Field(..., description="User prompt / instruction")
-    temperature: float = Field(0.6, ge=0.0, le=2.0)
+    temperature: float = Field(0.6, ge=0.0, le=1.0)
     max_tokens: int = Field(1024, ge=1, le=4096)
 
 
