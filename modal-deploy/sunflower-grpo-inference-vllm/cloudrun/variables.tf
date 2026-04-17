@@ -52,6 +52,31 @@ variable "sunbird_prod_token" {
   sensitive   = true
 }
 
+variable "sunflower_openai_url" {
+  type        = string
+  description = "Base URL of the OpenAI-compatible Sunflower-14B vLLM deployment on Modal. Must include the trailing `/v1`."
+  default     = "https://sb-modal-ws--sunflower-14b-openai-serve.modal.run/v1"
+}
+
+variable "vllm_api_key" {
+  type        = string
+  description = "Bearer token accepted by the OpenAI-compatible vLLM server (the same value stored in Modal secret `vllm-api-key`). Empty string disables auth on the proxy side."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sunflower_openai_model" {
+  type        = string
+  description = "Model id sent to the OpenAI-compatible upstream. Must match one of the values in `--served-model-name`."
+  default     = "Sunbird/Sunflower-14B"
+}
+
+variable "sunflower_system_message" {
+  type        = string
+  description = "System prompt prepended to every /generate_openai* request."
+  default     = "You are Sunflower, a helpful assistant made by Sunbird AI who understands all Ugandan languages. You specialise in accurate translations, explanations, summaries and other language tasks."
+}
+
 variable "upstream_timeout" {
   type        = number
   description = "Per-request upstream timeout in seconds."

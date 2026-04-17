@@ -23,6 +23,7 @@ Configuration (env vars):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -55,6 +56,23 @@ UPSTREAM_URL = os.environ.get(
 UPSTREAM_TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "600"))
 SUNBIRD_PROD_URL = os.environ.get("SUNBIRD_PROD_URL", "https://api.sunbird.ai").rstrip("/")
 SUNBIRD_PROD_TOKEN = os.environ.get("SUNBIRD_PROD_TOKEN")
+
+# OpenAI-compatible vLLM deployment (sunflower_14b_openai_vllm_modal.py).
+# Base URL must include `/v1`.
+SUNFLOWER_OPENAI_URL = os.environ.get(
+    "SUNFLOWER_OPENAI_URL",
+    "https://sb-modal-ws--sunflower-14b-openai-serve.modal.run/v1",
+).rstrip("/")
+SUNFLOWER_OPENAI_API_KEY = os.environ.get("VLLM_API_KEY", "")
+SUNFLOWER_OPENAI_MODEL = os.environ.get(
+    "SUNFLOWER_OPENAI_MODEL", "Sunbird/Sunflower-14B"
+)
+SUNFLOWER_SYSTEM_MESSAGE = os.environ.get(
+    "SUNFLOWER_SYSTEM_MESSAGE",
+    "You are Sunflower, a helpful assistant made by Sunbird AI who understands "
+    "all Ugandan languages. You specialise in accurate translations, "
+    "explanations, summaries and other language tasks.",
+)
 RATE_LIMIT_PER_MINUTE = os.environ.get("RATE_LIMIT_PER_MINUTE", "100/minute")
 RATE_LIMIT_PER_DAY = os.environ.get("RATE_LIMIT_PER_DAY", "1000/day")
 # Optional Redis-backed storage for multi-process / multi-replica deploys.
@@ -109,16 +127,26 @@ async def lifespan(app: FastAPI):
         base_url=SUNBIRD_PROD_URL,
         timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=15.0),
     )
+    openai_headers = {"Content-Type": "application/json"}
+    if SUNFLOWER_OPENAI_API_KEY:
+        openai_headers["Authorization"] = f"Bearer {SUNFLOWER_OPENAI_API_KEY}"
+    app.state.openai_http = httpx.AsyncClient(
+        base_url=SUNFLOWER_OPENAI_URL,
+        timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=15.0),
+        headers=openai_headers,
+    )
     log.info(
-        "Proxy ready, upstream=%s prod_upstream=%s",
+        "Proxy ready, upstream=%s prod_upstream=%s openai_upstream=%s",
         UPSTREAM_URL,
         SUNBIRD_PROD_URL,
+        SUNFLOWER_OPENAI_URL,
     )
     try:
         yield
     finally:
         await app.state.http.aclose()
         await app.state.prod_http.aclose()
+        await app.state.openai_http.aclose()
 
 
 app = FastAPI(
@@ -260,6 +288,78 @@ async def generate_production(req: ProductionRequest):
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible Sunflower-14B upstream
+# ---------------------------------------------------------------------------
+def _openai_chat_body(req: GenerateRequest, *, stream: bool) -> dict:
+    return {
+        "model": SUNFLOWER_OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": SUNFLOWER_SYSTEM_MESSAGE},
+            {"role": "user", "content": req.instruction},
+        ],
+        "temperature": req.temperature,
+        "max_tokens": req.max_tokens,
+        "stream": stream,
+    }
+
+
+@app.post("/generate_openai", response_model=GenerateResponse)
+async def generate_openai(req: GenerateRequest):
+    """Blocking chat completion against the OpenAI-compatible Sunflower-14B server."""
+    client: httpx.AsyncClient = app.state.openai_http
+    try:
+        r = await client.post("/chat/completions", json=_openai_chat_body(req, stream=False))
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI upstream error: {e}") from e
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json()
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise HTTPException(status_code=502, detail=f"Unexpected upstream payload: {e}") from e
+    return {"response": text}
+
+
+@app.post("/generate_openai_stream")
+async def generate_openai_stream(req: GenerateRequest):
+    """Stream token deltas from the OpenAI-compatible server as `{delta: ...}` SSE events.
+
+    Wire format matches /generate_stream so the frontend can consume either upstream
+    without branching.
+    """
+    client: httpx.AsyncClient = app.state.openai_http
+
+    async def passthrough() -> AsyncIterator[bytes]:
+        try:
+            async with client.stream(
+                "POST", "/chat/completions", json=_openai_chat_body(req, stream=True)
+            ) as upstream:
+                if upstream.status_code >= 400:
+                    body = await upstream.aread()
+                    raise HTTPException(status_code=upstream.status_code, detail=body.decode())
+                async for line in upstream.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        yield b"data: [DONE]\n\n"
+                        return
+                    try:
+                        chunk = json.loads(payload)
+                        delta = chunk["choices"][0].get("delta", {}).get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    if delta:
+                        yield f"data: {json.dumps({'delta': delta})}\n\n".encode()
+        except httpx.HTTPError as e:
+            log.exception("openai upstream stream error")
+            raise HTTPException(status_code=502, detail=f"OpenAI upstream error: {e}") from e
+
+    return StreamingResponse(passthrough(), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------

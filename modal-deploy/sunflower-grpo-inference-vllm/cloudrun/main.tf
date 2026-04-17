@@ -79,6 +79,22 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.sunbird_prod_token
       }
       env {
+        name  = "SUNFLOWER_OPENAI_URL"
+        value = var.sunflower_openai_url
+      }
+      env {
+        name  = "VLLM_API_KEY"
+        value = var.vllm_api_key
+      }
+      env {
+        name  = "SUNFLOWER_OPENAI_MODEL"
+        value = var.sunflower_openai_model
+      }
+      env {
+        name  = "SUNFLOWER_SYSTEM_MESSAGE"
+        value = var.sunflower_system_message
+      }
+      env {
         name  = "UPSTREAM_TIMEOUT"
         value = tostring(var.upstream_timeout)
       }

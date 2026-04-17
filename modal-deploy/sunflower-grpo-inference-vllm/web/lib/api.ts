@@ -8,11 +8,19 @@ export interface StreamHandlers {
 export async function streamGenerate(
   instruction: string,
   handlers: StreamHandlers,
-  opts: { temperature?: number; maxTokens?: number } = {},
+  opts: {
+    temperature?: number;
+    maxTokens?: number;
+    endpoint?: string;
+  } = {},
 ): Promise<void> {
-  const { temperature = 0.2, maxTokens = 1024 } = opts;
+  const {
+    temperature = 0.2,
+    maxTokens = 1024,
+    endpoint = "/generate_stream",
+  } = opts;
 
-  const response = await fetch("/generate_stream", {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

@@ -120,12 +120,14 @@ request shaping** without redeploying the inference service.
 
 ### Endpoints
 
-| Method | Path                   | Description                                                       |
-|--------|------------------------|-------------------------------------------------------------------|
-| GET    | `/health`              | Liveness for the proxy + readiness probe of the upstream          |
-| POST   | `/generate`            | Blocking generation → `{"response": "..."}`                       |
-| POST   | `/generate_stream`     | Server-Sent Events stream of `{"delta": "..."}` chunks then `[DONE]` |
-| POST   | `/generate_production` | Forwards to the production Sunbird AI API for A/B comparison      |
+| Method | Path                      | Description                                                       |
+|--------|---------------------------|-------------------------------------------------------------------|
+| GET    | `/health`                 | Liveness for the proxy + readiness probe of the upstream          |
+| POST   | `/generate`               | Blocking generation (GRPO LoRA) → `{"response": "..."}`           |
+| POST   | `/generate_stream`        | SSE stream of `{"delta": "..."}` chunks (GRPO LoRA) then `[DONE]` |
+| POST   | `/generate_openai`        | Blocking generation via OpenAI-compatible Sunflower-14B server    |
+| POST   | `/generate_openai_stream` | SSE stream via OpenAI-compatible server (same `{"delta": "..."}` shape) |
+| POST   | `/generate_production`    | Forwards to the production Sunbird AI API for A/B comparison      |
 
 Request body for `/generate` and `/generate_stream`:
 
@@ -162,10 +164,14 @@ Request body for `/generate_production` (forwarded as form-encoded to
 
 | Variable                 | Default                                                          | Notes |
 |--------------------------|------------------------------------------------------------------|-------|
-| `SUNFLOWER_UPSTREAM_URL` | `https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run`        | Modal `web` endpoint to proxy. |
+| `SUNFLOWER_UPSTREAM_URL` | `https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run`        | Modal `web` endpoint to proxy (GRPO LoRA). |
 | `UPSTREAM_TIMEOUT`       | `600`                                                            | Per-request timeout (seconds). |
 | `SUNBIRD_PROD_URL`       | `https://api.sunbird.ai`                                         | Base URL of the production Sunbird AI API. |
 | `SUNBIRD_PROD_TOKEN`     | _(unset)_                                                        | Bearer token for the production API. Required for `/generate_production`. |
+| `SUNFLOWER_OPENAI_URL`   | `https://sb-modal-ws--sunflower-14b-openai-serve.modal.run/v1`   | OpenAI-compatible vLLM upstream (must include `/v1`). |
+| `VLLM_API_KEY`           | _(unset)_                                                        | Bearer token for the OpenAI-compatible server. Required if the upstream was deployed with the `vllm-api-key` Modal secret. |
+| `SUNFLOWER_OPENAI_MODEL` | `Sunbird/Sunflower-14B`                                          | Model id sent to the OpenAI server. |
+| `SUNFLOWER_SYSTEM_MESSAGE` | _(built-in Sunflower system prompt)_                           | Override the system message prepended to OpenAI chat requests. |
 | `RATE_LIMIT_PER_MINUTE`  | `100/minute`                                                     | Per-IP per-minute limit. |
 | `RATE_LIMIT_PER_DAY`     | `1000/day`                                                       | Per-IP per-day limit. |
 | `RATE_LIMIT_STORAGE_URI` | `memory://`                                                      | Use `redis://...` for multi-replica deployments. |
@@ -207,6 +213,43 @@ curl -X POST http://localhost:8000/generate_production \
         "model_type":"qwen",
         "temperature":0.1,
         "system_message":""
+      }'
+
+# --- OpenAI-compatible Sunflower-14B upstream --------------------------------
+# Translation → temperature 0.3
+curl -X POST http://localhost:8000/generate_openai \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "temperature":0.3,
+        "max_tokens":1024
+      }' | jq
+
+# Non-translation → temperature 0.6
+curl -X POST http://localhost:8000/generate_openai \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Who is Sunbird AI, what do they do?",
+        "temperature":0.6,
+        "max_tokens":1024
+      }' | jq
+
+# Streaming, translation → temperature 0.3
+curl -N -X POST http://localhost:8000/generate_openai_stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to runyankole: Good morning, how are you today?",
+        "temperature":0.3,
+        "max_tokens":512
+      }'
+
+# Streaming, non-translation → temperature 0.6
+curl -N -X POST http://localhost:8000/generate_openai_stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Write a short poem about sunflowers.",
+        "temperature":0.6,
+        "max_tokens":512
       }'
 ```
 
@@ -390,7 +433,54 @@ curl -N -sS -X POST $SUNFLOWER_URL/generate_stream \
 Stream is a sequence of `data: {"delta": "..."}` lines terminated with
 `data: [DONE]`.
 
-#### 7.5.4 Production comparison — `POST /generate_production`
+#### 7.5.4 OpenAI-compatible Sunflower-14B — `POST /generate_openai` and `/generate_openai_stream`
+
+Both forward to the `sunflower-14b-openai` Modal app. Translation prompts
+should run cooler (`temperature: 0.3`) than free-form generation (`0.6`).
+
+```bash
+# Blocking, translation → temperature 0.3
+curl -sS -X POST $SUNFLOWER_URL/generate_openai \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "temperature":0.3,
+        "max_tokens":1024
+      }' | jq
+
+# Blocking, non-translation → temperature 0.6
+curl -sS -X POST $SUNFLOWER_URL/generate_openai \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Who is Sunbird AI, what do they do?",
+        "temperature":0.6,
+        "max_tokens":1024
+      }' | jq
+
+# Streaming, translation → temperature 0.3
+curl -N -sS -X POST $SUNFLOWER_URL/generate_openai_stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to runyankole: Good morning, how are you today?",
+        "temperature":0.3,
+        "max_tokens":512
+      }'
+
+# Streaming, non-translation → temperature 0.6
+curl -N -sS -X POST $SUNFLOWER_URL/generate_openai_stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Write a short poem about sunflowers.",
+        "temperature":0.6,
+        "max_tokens":512
+      }'
+```
+
+Stream wire format matches `/generate_stream` — `data: {"delta": "..."}` lines
+terminated with `data: [DONE]` — so frontend readers written against the GRPO
+stream work unchanged.
+
+#### 7.5.5 Production comparison — `POST /generate_production`
 
 Proxied to `https://api.sunbird.ai/tasks/sunflower_simple` using
 `SUNBIRD_PROD_TOKEN` configured on the Cloud Run service.
@@ -408,7 +498,7 @@ curl -sS -X POST $SUNFLOWER_URL/generate_production \
 
 Returns the production API's JSON body unchanged.
 
-#### 7.5.5 Rate-limit sanity check
+#### 7.5.6 Rate-limit sanity check
 
 Defaults are **100 req/min** and **1000 req/day** per IP. Firing 105 quick
 requests should produce a mix of `200` and `429` responses:
