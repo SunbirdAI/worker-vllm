@@ -1,0 +1,24 @@
+project_id = "sb-gcp-project-01"
+region     = "europe-west1"
+app        = "sunflower-grpo-test"
+repo       = "sunflower-grpo-test"
+port       = 8080
+
+# Bump this (or pass via -var) to deploy a new image.
+image_tag = "latest"
+
+sunflower_upstream_url = "https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run"
+sunbird_prod_url       = "https://api.sunbird.ai"
+sunbird_prod_token     = "REPLACE_WITH_PROD_BEARER_TOKEN"
+
+upstream_timeout      = 600
+rate_limit_per_minute = "100/minute"
+rate_limit_per_day    = "1000/day"
+
+cpu           = "1"
+memory        = "1Gi"
+min_instances = 0
+max_instances = 5
+
+allow_public        = true
+deletion_protection = false

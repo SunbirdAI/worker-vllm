@@ -7,8 +7,11 @@ using **vLLM**, exposing both blocking and streaming HTTP endpoints.
 Files:
 
 - [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_modal.py) — Modal app (image, volume, vLLM class, FastAPI endpoints).
-- [fastapi_app.py](fastapi_app.py) — standalone FastAPI app that proxies to the deployed Modal class.
+- [fastapi_app.py](fastapi_app.py) — FastAPI proxy app; also mounts the static frontend at `/`.
+- [web/](web/) — Next.js 15 frontend (static export) that the backend serves at `/`.
 - [client.py](client.py) — CLI client for HTTP, streaming, and direct Modal calls.
+- [Dockerfile](Dockerfile) — three-stage build (Node → Python deps → runtime) producing a single image.
+- [cloudrun/](cloudrun/) — Terraform module + Makefile for deploying the image to GCP Cloud Run.
 - [sunflower_grpo_combined_inference.ipynb](sunflower_grpo_combined_inference.ipynb) — original reference notebook.
 
 ---
@@ -100,11 +103,11 @@ Or with `curl`:
 ```bash
 curl -X POST $SUNFLOWER_URL/generate \
   -H 'content-type: application/json' \
-  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+  -d '{"instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;","temperature":0.2}'
 
 curl -N -X POST $SUNFLOWER_URL/generate_stream \
   -H 'content-type: application/json' \
-  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+  -d '{"instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;","temperature":0.2}'
 ```
 
 ## 6. Run the standalone FastAPI proxy app
@@ -117,26 +120,38 @@ request shaping** without redeploying the inference service.
 
 ### Endpoints
 
-| Method | Path               | Description                                                       |
-|--------|--------------------|-------------------------------------------------------------------|
-| GET    | `/health`          | Liveness for the proxy + readiness probe of the upstream          |
-| POST   | `/generate`        | Blocking generation → `{"response": "..."}`                       |
-| POST   | `/generate_stream` | Server-Sent Events stream of `{"delta": "..."}` chunks then `[DONE]` |
+| Method | Path                   | Description                                                       |
+|--------|------------------------|-------------------------------------------------------------------|
+| GET    | `/health`              | Liveness for the proxy + readiness probe of the upstream          |
+| POST   | `/generate`            | Blocking generation → `{"response": "..."}`                       |
+| POST   | `/generate_stream`     | Server-Sent Events stream of `{"delta": "..."}` chunks then `[DONE]` |
+| POST   | `/generate_production` | Forwards to the production Sunbird AI API for A/B comparison      |
 
 Request body for `/generate` and `/generate_stream`:
 
 ```json
 {
-  "instruction": "Translate to luganda: Good morning",
+  "instruction": "Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
   "temperature": 0.6,
   "max_tokens": 1024
+}
+```
+
+Request body for `/generate_production` (forwarded as form-encoded to
+`https://api.sunbird.ai/tasks/sunflower_simple`):
+
+```json
+{
+  "instruction": "translate from english to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+  "model_type": "qwen",
+  "temperature": 0.1,
+  "system_message": ""
 }
 ```
 
 ### Features
 
 - **Pure HTTP proxy** built on `httpx.AsyncClient` — no Modal SDK dependency.
-- **Optional bearer auth** via `SUNFLOWER_API_KEY` env var (no-op if unset).
 - **Rate limiting** (`slowapi`) — defaults to **100 requests/minute** and
   **1000 requests/day** per client IP. Returns HTTP 429 when exceeded.
 - **Access logging** with per-request `x-request-id` header and timing.
@@ -148,8 +163,9 @@ Request body for `/generate` and `/generate_stream`:
 | Variable                 | Default                                                          | Notes |
 |--------------------------|------------------------------------------------------------------|-------|
 | `SUNFLOWER_UPSTREAM_URL` | `https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run`        | Modal `web` endpoint to proxy. |
-| `SUNFLOWER_API_KEY`      | _(unset)_                                                        | If set, clients must send `Authorization: Bearer <key>`. |
 | `UPSTREAM_TIMEOUT`       | `600`                                                            | Per-request timeout (seconds). |
+| `SUNBIRD_PROD_URL`       | `https://api.sunbird.ai`                                         | Base URL of the production Sunbird AI API. |
+| `SUNBIRD_PROD_TOKEN`     | _(unset)_                                                        | Bearer token for the production API. Required for `/generate_production`. |
 | `RATE_LIMIT_PER_MINUTE`  | `100/minute`                                                     | Per-IP per-minute limit. |
 | `RATE_LIMIT_PER_DAY`     | `1000/day`                                                       | Per-IP per-day limit. |
 | `RATE_LIMIT_STORAGE_URI` | `memory://`                                                      | Use `redis://...` for multi-replica deployments. |
@@ -162,12 +178,12 @@ uv add fastapi uvicorn httpx slowapi
 uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Optional auth + custom limits:
+Optional: custom limits + production comparison:
 
 ```bash
-export SUNFLOWER_API_KEY=secret123
 export RATE_LIMIT_PER_MINUTE=60/minute
 export RATE_LIMIT_PER_DAY=500/day
+export SUNBIRD_PROD_TOKEN=prod_access_token_here   # enables /generate_production
 ```
 
 ### Test it
@@ -176,22 +192,30 @@ export RATE_LIMIT_PER_DAY=500/day
 curl http://localhost:8000/health
 
 curl -X POST http://localhost:8000/generate \
-  -H 'authorization: Bearer secret123' \
   -H 'content-type: application/json' \
-  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+  -d '{"instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;","temperature":0.2}'
 
 curl -N -X POST http://localhost:8000/generate_stream \
-  -H 'authorization: Bearer secret123' \
   -H 'content-type: application/json' \
-  -d '{"instruction":"Translate to luganda: Good morning","temperature":0.2}'
+  -d '{"instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;","temperature":0.2}'
+
+# Compare against production Sunbird AI API
+curl -X POST http://localhost:8000/generate_production \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"translate from english to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "model_type":"qwen",
+        "temperature":0.1,
+        "system_message":""
+      }'
 ```
 
 Or point [client.py](client.py) at the local proxy:
 
 ```bash
 export SUNFLOWER_URL=http://localhost:8000
-uv run client.py http   "Translate to luganda: Good morning" 0.2
-uv run client.py stream "Translate to luganda: Good morning" 0.2
+uv run client.py http   "Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;" 0.2
+uv run client.py stream "Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;" 0.2
 ```
 
 ### Notes on rate limiting
@@ -203,7 +227,229 @@ uv run client.py stream "Translate to luganda: Good morning" 0.2
   proxy / load balancer, ensure `X-Forwarded-For` is forwarded and consider
   swapping the key function to read it.
 
-## 7. Configuration knobs
+## 7. Dockerize + deploy (frontend + backend in one image) to GCP Cloud Run (Terraform)
+
+The single container ships both the FastAPI proxy **and** a static Next.js
+frontend (translation + free-chat A/B comparison UI). FastAPI mounts the
+pre-built `web/out/` at `/`, so everything lives on the same origin — no
+CORS, no second service.
+
+Layout:
+
+- [Dockerfile](Dockerfile) — three-stage: `node:22-slim` builds `web/`, `python:3.12-slim` installs deps via `uv`, runtime stage ships both.
+- [web/](web/) — Next.js 15 App Router + Tailwind. Built with `BUILD_MODE=export next build` into `web/out/`.
+- [cloudrun/](cloudrun/) — Terraform module (local state) + `Makefile` for build/push/apply.
+
+### 7.0 Local development
+
+**Integrated mode (recommended for running the app, single terminal)** —
+FastAPI serves both the API and the built frontend at `http://localhost:8000/`.
+
+```bash
+make install        # one-time: npm install in web/, uv sync
+make serve          # builds web/out/ then runs uvicorn --reload on :8000
+```
+
+`uvicorn --reload` auto-reloads when `fastapi_app.py` changes; re-run
+`make web` (or `make serve`) after editing anything under `web/` to rebuild
+the static bundle.
+
+**Hot-reload mode (two terminals, only needed when iterating on the UI)** —
+Next.js dev server on `:3000` proxies API calls to FastAPI on `:8000`.
+
+```bash
+# Terminal 1
+make dev-api        # backend only on :8000
+
+# Terminal 2
+make dev-web        # next dev on :3000 (rewrites /health, /generate* to :8000)
+# → http://localhost:3000
+```
+
+`next.config.ts` rewrites are gated on `BUILD_MODE !== "export"`, so they
+power the dev proxy but have no effect on the production static build.
+
+### 7.1 Prerequisites
+
+```bash
+# Tools
+gcloud  --version      # >= 450
+terraform version      # >= 1.6
+docker  --version      # with buildx
+node    --version      # >= 20 (only needed for local dev; the image build uses its own Node)
+npm     --version
+
+# Auth (one-time)
+make -C cloudrun auth
+```
+
+### 7.2 App / infra configuration
+
+Defaults, matching the request above:
+
+```
+APP=sunflower-grpo-test
+PROJECT_ID=sb-gcp-project-01
+REGION=europe-west1
+PORT=8080
+REPO=sunflower-grpo-test
+TAG=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${APP}
+```
+
+Copy the example tfvars and set the production bearer token:
+
+```bash
+cp cloudrun/terraform.tfvars.example cloudrun/terraform.tfvars
+# edit cloudrun/terraform.tfvars → set sunbird_prod_token
+```
+
+### 7.3 One-shot deploy
+
+From inside [cloudrun/](cloudrun/):
+
+```bash
+make tf-init                 # first time only
+make deploy                  # build+push linux/amd64 image, then terraform apply
+make url                     # print the Cloud Run URL
+```
+
+`make deploy` uses the short git SHA as the image tag (and also pushes
+`:latest`), and passes it to Terraform via `-var image_tag=...`.
+
+### 7.4 Manual steps (if you'd rather not use `make deploy`)
+
+```bash
+# From repo root (so the build context sees fastapi_app.py, pyproject.toml, uv.lock)
+cd modal-deploy/sunflower-grpo-inference-vllm
+
+TAG=$(git rev-parse --short HEAD)
+IMAGE=europe-west1-docker.pkg.dev/sb-gcp-project-01/sunflower-grpo-test/sunflower-grpo-test
+
+# Build + push
+docker buildx build --platform linux/amd64 \
+  -t $IMAGE:$TAG -t $IMAGE:latest --push .
+
+# Apply
+cd cloudrun
+terraform apply -var="image_tag=$TAG"
+```
+
+### 7.5 Test the Cloud Run service
+
+Pick up the service URL from Terraform (or substitute the one Terraform
+prints, e.g. `https://sunflower-grpo-test-<hash>-ew.a.run.app`):
+
+```bash
+export SUNFLOWER_URL=$(cd cloudrun && terraform output -raw service_url)
+```
+
+#### 7.5.1 Liveness + upstream probe
+
+```bash
+curl -sS $SUNFLOWER_URL/health | jq
+```
+
+Expected:
+
+```json
+{
+  "status": "ok",
+  "upstream": "https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run",
+  "upstream_status": "ok"
+}
+```
+
+#### 7.5.2 Blocking generation — `POST /generate`
+
+```bash
+curl -sS -X POST $SUNFLOWER_URL/generate \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "temperature":0.2,
+        "max_tokens":1024
+      }' | jq
+```
+
+Returns `{"response": "..."}`.
+
+#### 7.5.3 Streaming generation — `POST /generate_stream`
+
+`-N` disables curl output buffering so you see SSE chunks as they arrive.
+
+```bash
+curl -N -sS -X POST $SUNFLOWER_URL/generate_stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"Translate to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "temperature":0.2,
+        "max_tokens":1024
+      }'
+```
+
+Stream is a sequence of `data: {"delta": "..."}` lines terminated with
+`data: [DONE]`.
+
+#### 7.5.4 Production comparison — `POST /generate_production`
+
+Proxied to `https://api.sunbird.ai/tasks/sunflower_simple` using
+`SUNBIRD_PROD_TOKEN` configured on the Cloud Run service.
+
+```bash
+curl -sS -X POST $SUNFLOWER_URL/generate_production \
+  -H 'content-type: application/json' \
+  -d '{
+        "instruction":"translate from english to luganda: To promote standardisation in the planning, acquisition, implementation, delivery, support and maintenance of information technology equipment and services, to ensure uniformity in quality, adequacy and reliability of information technology usage throughout Uganda;",
+        "model_type":"qwen",
+        "temperature":0.1,
+        "system_message":""
+      }' | jq
+```
+
+Returns the production API's JSON body unchanged.
+
+#### 7.5.5 Rate-limit sanity check
+
+Defaults are **100 req/min** and **1000 req/day** per IP. Firing 105 quick
+requests should produce a mix of `200` and `429` responses:
+
+```bash
+for i in $(seq 1 105); do
+  curl -s -o /dev/null -w "%{http_code}\n" $SUNFLOWER_URL/health
+done | sort | uniq -c
+```
+
+Every response also carries an `x-request-id` header from the proxy — grab
+it with `-D -` to correlate with logs (`make -C cloudrun logs`).
+
+### 7.6 Tail logs
+
+```bash
+make -C cloudrun logs
+```
+
+### 7.7 Notes
+
+- **State** is local (`cloudrun/terraform.tfstate`). Commit nothing from
+  `cloudrun/` other than `*.tf`, `terraform.tfvars.example`, the `Makefile`,
+  and `.gitignore`.
+- **Secrets**: `sunbird_prod_token` is passed to Cloud Run as a plain env var
+  via tfvars. If you later want to rotate without re-applying, migrate it to
+  Secret Manager + `env.value_source.secret_key_ref`.
+- **Region**: `europe-west1` for both Artifact Registry and Cloud Run, so
+  image pulls stay in-region.
+- **Platform**: the image is built `--platform linux/amd64` — required when
+  building from an Apple Silicon Mac.
+- **Frontend build**: happens inside the Docker build's Node stage, so you
+  don't need Node installed to ship. Re-runs any time `web/**` changes.
+- **UI modes**: the landing page starts in **Chat** mode (free-form
+  instruction → A/B against production). Clicking **Translate** swaps the
+  input to From / To language pickers + text area; **Exit translation**
+  returns to chat. Both modes fire `/generate_stream` (GRPO, streaming) and
+  `/generate_production` (blocking) in parallel; two panels show results
+  side-by-side with per-panel latency.
+
+## 8. Configuration knobs
 
 Edit constants at the top of [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_modal.py):
 
@@ -215,7 +461,7 @@ Edit constants at the top of [sunflower_grpo_vllm_modal.py](sunflower_grpo_vllm_
 | `scaledown_window` | `300` (5 min)  | Idle time before container spins down. |
 | `@modal.concurrent(max_inputs=8)` | `8` | vLLM batches concurrent requests on one warm replica. |
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 - **OOM at engine init** — drop `gpu_memory_utilization` to `0.85` or move to `A100-80GB` / `L40S`.
 - **Gated repo 401** — confirm the `huggingface` Modal secret has a token with access to the two `jq/...` repos.
