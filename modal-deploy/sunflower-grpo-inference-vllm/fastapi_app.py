@@ -14,8 +14,11 @@ Run locally:
 Configuration (env vars):
     SUNFLOWER_UPSTREAM_URL  Upstream Modal web URL (no trailing slash).
                             Default: https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run
-    SUNFLOWER_API_KEY       If set, clients must send `Authorization: Bearer <key>`.
     UPSTREAM_TIMEOUT        Per-request timeout in seconds. Default: 600.
+    SUNBIRD_PROD_URL        Production Sunbird AI API base URL.
+                            Default: https://api.sunbird.ai
+    SUNBIRD_PROD_TOKEN      Bearer token for the production API (required for
+                            /generate_production).
 """
 
 from __future__ import annotations
@@ -25,17 +28,22 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.responses import JSONResponse
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -44,8 +52,9 @@ UPSTREAM_URL = os.environ.get(
     "SUNFLOWER_UPSTREAM_URL",
     "https://sb-modal-ws--sunflower-grpo-vllm-web.modal.run",
 ).rstrip("/")
-API_KEY = os.environ.get("SUNFLOWER_API_KEY")  # optional bearer token gate
 UPSTREAM_TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "600"))
+SUNBIRD_PROD_URL = os.environ.get("SUNBIRD_PROD_URL", "https://api.sunbird.ai").rstrip("/")
+SUNBIRD_PROD_TOKEN = os.environ.get("SUNBIRD_PROD_TOKEN")
 RATE_LIMIT_PER_MINUTE = os.environ.get("RATE_LIMIT_PER_MINUTE", "100/minute")
 RATE_LIMIT_PER_DAY = os.environ.get("RATE_LIMIT_PER_DAY", "1000/day")
 # Optional Redis-backed storage for multi-process / multi-replica deploys.
@@ -80,6 +89,13 @@ class GenerateResponse(BaseModel):
     response: str
 
 
+class ProductionRequest(BaseModel):
+    instruction: str = Field(..., description="User prompt / instruction")
+    model_type: str = Field("qwen", description="Production model type, e.g. `qwen`")
+    temperature: float = Field(0.1, ge=0.0, le=1.0)
+    system_message: str = Field("", description="Optional system message override")
+
+
 # ---------------------------------------------------------------------------
 # Lifespan: shared httpx client
 # ---------------------------------------------------------------------------
@@ -89,11 +105,20 @@ async def lifespan(app: FastAPI):
         base_url=UPSTREAM_URL,
         timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=15.0),
     )
-    log.info("Proxy ready, upstream=%s", UPSTREAM_URL)
+    app.state.prod_http = httpx.AsyncClient(
+        base_url=SUNBIRD_PROD_URL,
+        timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=15.0),
+    )
+    log.info(
+        "Proxy ready, upstream=%s prod_upstream=%s",
+        UPSTREAM_URL,
+        SUNBIRD_PROD_URL,
+    )
     try:
         yield
     finally:
         await app.state.http.aclose()
+        await app.state.prod_http.aclose()
 
 
 app = FastAPI(
@@ -148,19 +173,6 @@ async def access_log(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Auth dependency (no-op when SUNFLOWER_API_KEY is unset)
-# ---------------------------------------------------------------------------
-async def require_api_key(authorization: str | None = Header(default=None)):
-    if not API_KEY:
-        return
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = authorization.split(" ", 1)[1].strip()
-    if token != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 @app.get("/health")
@@ -180,11 +192,7 @@ async def health():
     }
 
 
-@app.post(
-    "/generate",
-    response_model=GenerateResponse,
-    dependencies=[Depends(require_api_key)],
-)
+@app.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest):
     client: httpx.AsyncClient = app.state.http
     try:
@@ -196,7 +204,7 @@ async def generate(req: GenerateRequest):
     return r.json()
 
 
-@app.post("/generate_stream", dependencies=[Depends(require_api_key)])
+@app.post("/generate_stream")
 async def generate_stream(req: GenerateRequest):
     client: httpx.AsyncClient = app.state.http
 
@@ -216,3 +224,58 @@ async def generate_stream(req: GenerateRequest):
             raise HTTPException(status_code=502, detail=f"Upstream error: {e}") from e
 
     return StreamingResponse(passthrough(), media_type="text/event-stream")
+
+
+@app.post("/generate_production")
+async def generate_production(req: ProductionRequest):
+    """Forward to the production Sunbird AI API for side-by-side comparison.
+
+    The upstream expects form-encoded (`application/x-www-form-urlencoded`)
+    data with a bearer token distinct from this proxy's own API_KEY.
+    """
+    if not SUNBIRD_PROD_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="SUNBIRD_PROD_TOKEN is not configured on the proxy",
+        )
+    client: httpx.AsyncClient = app.state.prod_http
+    try:
+        r = await client.post(
+            "/tasks/sunflower_simple",
+            headers={
+                "accept": "application/json",
+                "Authorization": f"Bearer {SUNBIRD_PROD_TOKEN}",
+            },
+            data={
+                "instruction": req.instruction,
+                "model_type": req.model_type,
+                "temperature": str(req.temperature),
+                "system_message": req.system_message,
+            },
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=502, detail=f"Production upstream error: {e}"
+        ) from e
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Static frontend (Next.js static export → web/out/). Mounted last so all
+# explicit API routes above take precedence over the SPA fallback.
+# ---------------------------------------------------------------------------
+_STATIC_DIR = Path(__file__).parent / "web" / "out"
+if _STATIC_DIR.is_dir():
+    app.mount(
+        "/",
+        StaticFiles(directory=_STATIC_DIR, html=True),
+        name="frontend",
+    )
+    log.info("Mounted static frontend from %s", _STATIC_DIR)
+else:
+    log.info(
+        "No static frontend at %s — run `npm run build` in web/ to generate it.",
+        _STATIC_DIR,
+    )
