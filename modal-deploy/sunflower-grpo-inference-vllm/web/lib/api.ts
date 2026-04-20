@@ -87,7 +87,7 @@ export interface ProductionResponse {
 export async function generateProduction({
   instruction,
   modelType = "qwen",
-  temperature = 0.1,
+  temperature = 0.6,
   systemMessage = "",
   signal,
 }: {
