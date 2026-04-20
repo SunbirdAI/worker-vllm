@@ -11,12 +11,15 @@ import {
   type PanelState,
   type ProdMode,
 } from "@/components/compare-panel";
+import { TemperatureSlider } from "@/components/temperature-slider";
 import { buildTranslationPrompt } from "@/lib/prompt";
 import { generateProduction, streamGenerate } from "@/lib/api";
 
 type Mode = "chat" | "translate";
 
 const EMPTY: PanelState = { text: "", status: "idle" };
+const CHAT_TEMP = 0.6;
+const TRANSLATE_TEMP = 0.1;
 
 export default function Page() {
   const [mode, setMode] = useState<Mode>("chat");
@@ -25,13 +28,20 @@ export default function Page() {
   const [grpoBusy, setGrpoBusy] = useState(false);
   const [prodBusy, setProdBusy] = useState(false);
   const [prodMode, setProdMode] = useState<ProdMode>("stream");
+  const [temperature, setTemperature] = useState<number>(CHAT_TEMP);
   const [lastInstruction, setLastInstruction] = useState<string | null>(null);
   const grpoCtrlRef = useRef<AbortController | null>(null);
   const prodCtrlRef = useRef<AbortController | null>(null);
 
   const busy = grpoBusy || prodBusy;
 
-  async function runGrpo(instruction: string) {
+  function handleModeChange(next: Mode) {
+    if (next === mode) return;
+    setMode(next);
+    setTemperature(next === "translate" ? TRANSLATE_TEMP : CHAT_TEMP);
+  }
+
+  async function runGrpo(instruction: string, temp: number) {
     grpoCtrlRef.current?.abort();
     const controller = new AbortController();
     grpoCtrlRef.current = controller;
@@ -63,7 +73,7 @@ export default function Page() {
             setGrpo({ text: "", status: "error", error: err.message });
           },
         },
-        { temperature: 0.2, maxTokens: 1024 },
+        { temperature: temp, maxTokens: 1024 },
       );
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
@@ -77,7 +87,11 @@ export default function Page() {
     }
   }
 
-  async function runProd(instruction: string, forceMode?: ProdMode) {
+  async function runProd(
+    instruction: string,
+    temp: number,
+    forceMode?: ProdMode,
+  ) {
     prodCtrlRef.current?.abort();
     const controller = new AbortController();
     prodCtrlRef.current = controller;
@@ -112,7 +126,7 @@ export default function Page() {
             },
           },
           {
-            temperature: 0.2,
+            temperature: temp,
             maxTokens: 1024,
             endpoint: "/generate_openai_stream",
           },
@@ -120,6 +134,7 @@ export default function Page() {
       } else {
         const data = await generateProduction({
           instruction,
+          temperature: temp,
           signal: controller.signal,
         });
         const text =
@@ -148,20 +163,23 @@ export default function Page() {
     if (next === prodMode) return;
     setProdMode(next);
     if (lastInstruction && !prodBusy) {
-      runProd(lastInstruction, next);
+      runProd(lastInstruction, temperature, next);
     }
   }
 
   async function runComparison(instruction: string) {
     setLastInstruction(instruction);
-    await Promise.all([runGrpo(instruction), runProd(instruction)]);
+    await Promise.all([
+      runGrpo(instruction, temperature),
+      runProd(instruction, temperature),
+    ]);
   }
 
   const retryGrpo = lastInstruction
-    ? () => runGrpo(lastInstruction)
+    ? () => runGrpo(lastInstruction, temperature)
     : undefined;
   const retryProd = lastInstruction
-    ? () => runProd(lastInstruction)
+    ? () => runProd(lastInstruction, temperature)
     : undefined;
 
   const hasResults = grpo.status !== "idle" || prod.status !== "idle";
@@ -193,7 +211,7 @@ export default function Page() {
           <ChatForm
             busy={busy}
             onSubmit={(text) => runComparison(text)}
-            onEnterTranslate={() => setMode("translate")}
+            onEnterTranslate={() => handleModeChange("translate")}
           />
         ) : (
           <TranslateForm
@@ -201,9 +219,21 @@ export default function Page() {
             onSubmit={({ source, target, text }) =>
               runComparison(buildTranslationPrompt({ source, target, text }))
             }
-            onExit={() => setMode("chat")}
+            onExit={() => handleModeChange("chat")}
           />
         )}
+      </section>
+
+      <section className="mt-3">
+        <TemperatureSlider
+          value={temperature}
+          onChange={setTemperature}
+          hint={
+            mode === "translate"
+              ? "0.1 recommended for translations"
+              : "0.6 recommended for general prompts"
+          }
+        />
       </section>
 
       {hasResults && (

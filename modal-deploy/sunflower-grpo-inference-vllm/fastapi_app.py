@@ -110,7 +110,7 @@ class GenerateResponse(BaseModel):
 class ProductionRequest(BaseModel):
     instruction: str = Field(..., description="User prompt / instruction")
     model_type: str = Field("qwen", description="Production model type, e.g. `qwen`")
-    temperature: float = Field(0.1, ge=0.0, le=1.0)
+    temperature: float = Field(0.6, ge=0.0, le=1.0)
     system_message: str = Field("", description="Optional system message override")
 
 
@@ -236,6 +236,7 @@ async def generate(req: GenerateRequest):
 async def generate_stream(req: GenerateRequest):
     client: httpx.AsyncClient = app.state.http
 
+    logging.info(f"Received /generate_stream request with body: {req.model_dump_json()}")
     async def passthrough() -> AsyncIterator[bytes]:
         try:
             async with client.stream(
@@ -335,6 +336,7 @@ async def generate_openai_stream(req: GenerateRequest):
 
     async def passthrough() -> AsyncIterator[bytes]:
         try:
+            logging.info(f"Requesting OpenAI stream with body: {json.dumps(_openai_chat_body(req, stream=True))}")
             async with client.stream(
                 "POST", "/chat/completions", json=_openai_chat_body(req, stream=True)
             ) as upstream:
