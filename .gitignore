@@ -6,3 +6,16 @@ test/*
 vllm-base/vllm-*
 .DS_Store
 .ipynb_checkpoints
+
+# Orpheus-3B local artifacts
+modal-deploy/orpheus-3B/_build_notebook.py
+modal-deploy/orpheus-3B/_build_inference_notebook.py
+modal-deploy/orpheus-3B/_build_multilingual_notebook.py
+modal-deploy/orpheus-3B/_build_vllm_inference_notebook.py
+modal-deploy/orpheus-3B/outputs/
+modal-deploy/orpheus-3B/inference_outputs/
+modal-deploy/orpheus-3B/Orpheus_(3B)_TTS.ipynb
+service-account-key.json
+
+budget.json
+notification.json
